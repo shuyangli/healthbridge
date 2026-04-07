@@ -78,7 +78,8 @@ func newJobsListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printJobs(c.OutOrStdout(), recs)
+			asJSON, _ := c.Flags().GetBool("json")
+			return printJobs(c.OutOrStdout(), recs, asJSON)
 		},
 	}
 	c.Flags().String("status", "", "Filter by status (pending, done, failed, expired, canceled)")
@@ -105,7 +106,8 @@ func newJobsGetCmd() *cobra.Command {
 				}
 				return err
 			}
-			return printJob(c.OutOrStdout(), rec)
+			asJSON, _ := c.Flags().GetBool("json")
+			return printJob(c.OutOrStdout(), rec, asJSON)
 		},
 	}
 }
@@ -137,6 +139,7 @@ func runJobsWait(c *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
+	asJSON := flags.JSON
 	rec, err := store.Get(args[0])
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -145,7 +148,7 @@ func runJobsWait(c *cobra.Command, args []string) error {
 		return err
 	}
 	if rec.Status != jobs.StatusPending && rec.Status != jobs.StatusRunning {
-		return printJob(c.OutOrStdout(), rec)
+		return printJob(c.OutOrStdout(), rec, asJSON)
 	}
 
 	session, authToken, err := loadSession(flags)
@@ -161,7 +164,7 @@ func runJobsWait(c *cobra.Command, args []string) error {
 		return fmt.Errorf("poll results: %w", err)
 	}
 	if len(resp.Results) == 0 {
-		return printJob(c.OutOrStdout(), rec) // still pending
+		return printJob(c.OutOrStdout(), rec, asJSON) // still pending
 	}
 	first := resp.Results[0]
 	result, err := session.OpenResult(first.JobID, first.PageIndex, first.Blob)
@@ -181,7 +184,7 @@ func runJobsWait(c *cobra.Command, args []string) error {
 		_ = store.MarkDone(rec.ID, blob)
 	}
 	updated, _ := store.Get(rec.ID)
-	return printJob(c.OutOrStdout(), updated)
+	return printJob(c.OutOrStdout(), updated, asJSON)
 }
 
 func newJobsCancelCmd() *cobra.Command {
@@ -229,13 +232,65 @@ func newJobsPruneCmd() *cobra.Command {
 
 // ---- output formatting ----
 
-func printJobs(out io.Writer, recs []*jobs.JobRecord) error {
+// jobJSON is the public JSON shape for a job mirror record. Field names
+// match the snake_case used elsewhere in the CLI's --json output.
+type jobJSON struct {
+	ID           string          `json:"id"`
+	PairID       string          `json:"pair_id"`
+	Kind         string          `json:"kind"`
+	Status       string          `json:"status"`
+	CreatedAt    time.Time       `json:"created_at"`
+	Deadline     *time.Time      `json:"deadline,omitempty"`
+	CompletedAt  *time.Time      `json:"completed_at,omitempty"`
+	Attempts     int             `json:"attempts,omitempty"`
+	ErrorCode    string          `json:"error_code,omitempty"`
+	ErrorMessage string          `json:"error_message,omitempty"`
+	Payload      json.RawMessage `json:"payload,omitempty"`
+	Result       json.RawMessage `json:"result,omitempty"`
+}
+
+func jobToJSON(r *jobs.JobRecord) jobJSON {
+	j := jobJSON{
+		ID:           r.ID,
+		PairID:       r.PairID,
+		Kind:         r.Kind,
+		Status:       string(r.Status),
+		CreatedAt:    r.CreatedAt.UTC(),
+		Attempts:     r.Attempts,
+		ErrorCode:    r.ErrorCode,
+		ErrorMessage: r.ErrorMessage,
+	}
+	if !r.Deadline.IsZero() {
+		t := r.Deadline.UTC()
+		j.Deadline = &t
+	}
+	if !r.CompletedAt.IsZero() {
+		t := r.CompletedAt.UTC()
+		j.CompletedAt = &t
+	}
+	if len(r.PayloadJSON) > 0 {
+		j.Payload = json.RawMessage(r.PayloadJSON)
+	}
+	if len(r.ResultJSON) > 0 {
+		j.Result = json.RawMessage(r.ResultJSON)
+	}
+	return j
+}
+
+func printJobs(out io.Writer, recs []*jobs.JobRecord, asJSON bool) error {
+	// Stable order: newest first.
+	sort.Slice(recs, func(i, j int) bool { return recs[i].CreatedAt.After(recs[j].CreatedAt) })
+	if asJSON {
+		arr := make([]jobJSON, 0, len(recs))
+		for _, r := range recs {
+			arr = append(arr, jobToJSON(r))
+		}
+		return writeJSON(out, map[string]any{"jobs": arr})
+	}
 	if len(recs) == 0 {
 		fmt.Fprintln(out, "(no jobs)")
 		return nil
 	}
-	// Stable order: newest first.
-	sort.Slice(recs, func(i, j int) bool { return recs[i].CreatedAt.After(recs[j].CreatedAt) })
 	fmt.Fprintf(out, "%-32s %-8s %-10s %s\n", "ID", "KIND", "STATUS", "CREATED")
 	for _, r := range recs {
 		fmt.Fprintf(out, "%-32s %-8s %-10s %s\n",
@@ -244,7 +299,10 @@ func printJobs(out io.Writer, recs []*jobs.JobRecord) error {
 	return nil
 }
 
-func printJob(out io.Writer, r *jobs.JobRecord) error {
+func printJob(out io.Writer, r *jobs.JobRecord, asJSON bool) error {
+	if asJSON {
+		return writeJSON(out, jobToJSON(r))
+	}
 	fmt.Fprintf(out, "id         : %s\n", r.ID)
 	fmt.Fprintf(out, "pair_id    : %s\n", r.PairID)
 	fmt.Fprintf(out, "kind       : %s\n", r.Kind)

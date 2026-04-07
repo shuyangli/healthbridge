@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -137,5 +138,89 @@ func TestJobsMirrorRecordsFailureFromDrainer(t *testing.T) {
 	}
 	if rec.ErrorCode != "scope_denied" {
 		t.Errorf("error_code = %q, want scope_denied", rec.ErrorCode)
+	}
+}
+
+// TestPrintJobsJSON verifies that printJobs(asJSON=true) emits a
+// machine-readable {"jobs":[...]} payload with the documented field
+// names. Regression for issue #1 — jobs list/get/wait used to ignore
+// --json and emit human tables.
+func TestPrintJobsJSON(t *testing.T) {
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+	recs := []*jobs.JobRecord{
+		{
+			ID:          "job-a",
+			PairID:      "01J9ZX0PAIR000000000000050",
+			Kind:        "read",
+			Status:      jobs.StatusDone,
+			CreatedAt:   now,
+			CompletedAt: now.Add(2 * time.Second),
+			ResultJSON:  []byte(`{"type":"step_count","samples":[]}`),
+		},
+		{
+			ID:           "job-b",
+			PairID:       "01J9ZX0PAIR000000000000050",
+			Kind:         "read",
+			Status:       jobs.StatusFailed,
+			CreatedAt:    now.Add(-time.Minute),
+			ErrorCode:    "scope_denied",
+			ErrorMessage: "no auth",
+		},
+	}
+	var out bytes.Buffer
+	if err := printJobs(&out, recs, true); err != nil {
+		t.Fatalf("printJobs: %v", err)
+	}
+	var got struct {
+		Jobs []jobJSON `json:"jobs"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
+	}
+	if len(got.Jobs) != 2 {
+		t.Fatalf("len = %d, want 2", len(got.Jobs))
+	}
+	// Newest-first ordering: job-a (now) comes before job-b (now-1m).
+	if got.Jobs[0].ID != "job-a" || got.Jobs[1].ID != "job-b" {
+		t.Errorf("order = [%s,%s], want [job-a,job-b]", got.Jobs[0].ID, got.Jobs[1].ID)
+	}
+	if got.Jobs[0].Status != "done" {
+		t.Errorf("status[0] = %q, want done", got.Jobs[0].Status)
+	}
+	// writeJSON pretty-prints, so re-marshal compactly to compare.
+	compact := bytes.Buffer{}
+	if err := json.Compact(&compact, got.Jobs[0].Result); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if compact.String() != `{"type":"step_count","samples":[]}` {
+		t.Errorf("result[0] = %s", compact.String())
+	}
+	if got.Jobs[1].ErrorCode != "scope_denied" {
+		t.Errorf("error_code[1] = %q", got.Jobs[1].ErrorCode)
+	}
+}
+
+// TestPrintJobJSON covers the single-job path used by jobs get/wait.
+func TestPrintJobJSON(t *testing.T) {
+	rec := &jobs.JobRecord{
+		ID:        "job-x",
+		PairID:    "p",
+		Kind:      "write",
+		Status:    jobs.StatusPending,
+		CreatedAt: time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC),
+	}
+	var out bytes.Buffer
+	if err := printJob(&out, rec, true); err != nil {
+		t.Fatalf("printJob: %v", err)
+	}
+	var got jobJSON
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
+	}
+	if got.ID != "job-x" || got.Status != "pending" || got.Kind != "write" {
+		t.Errorf("got = %+v", got)
+	}
+	if got.CompletedAt != nil {
+		t.Errorf("completed_at should be omitted when zero")
 	}
 }
