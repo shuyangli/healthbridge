@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://healthbridge.local/proto/schema.json",
+  "title": "HealthBridge wire protocol",
+  "description": "Job and result plaintext shapes that flow between the CLI and the iOS app. In M1 these travel through the relay as base64; in M2+ they are encrypted before reaching the relay.",
+
+  "$defs": {
+    "ulid": {
+      "type": "string",
+      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+      "description": "Crockford-base32 ULID."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 / ISO8601 with timezone, always UTC."
+    },
+    "sampleType": {
+      "type": "string",
+      "description": "Stable enum identifying a HealthKit sample type. The iOS app maps these to HKQuantityTypeIdentifier strings.",
+      "enum": [
+        "step_count",
+        "active_energy_burned",
+        "basal_energy_burned",
+        "heart_rate",
+        "heart_rate_resting",
+        "body_mass",
+        "body_mass_index",
+        "blood_glucose",
+        "dietary_energy_consumed",
+        "dietary_water",
+        "sleep_analysis",
+        "workout"
+      ]
+    },
+    "unit": {
+      "type": "string",
+      "description": "HealthKit-compatible unit string (e.g. 'count', 'kcal', 'kg', 'mg/dL', 'count/min').",
+      "examples": ["count", "kcal", "kg", "mg/dL", "count/min", "mL"]
+    },
+    "sample": {
+      "type": "object",
+      "required": ["type", "value", "unit", "start", "end"],
+      "properties": {
+        "uuid": { "type": "string", "description": "Server-assigned by HealthKit on writes; required on reads." },
+        "type": { "$ref": "#/$defs/sampleType" },
+        "value": { "type": "number" },
+        "unit": { "$ref": "#/$defs/unit" },
+        "start": { "$ref": "#/$defs/timestamp" },
+        "end": { "$ref": "#/$defs/timestamp" },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "source": {
+          "type": "object",
+          "description": "Filled in by the iOS app on reads; ignored on writes.",
+          "properties": {
+            "name": { "type": "string" },
+            "bundle_id": { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "readPayload": {
+      "type": "object",
+      "required": ["type", "from", "to"],
+      "properties": {
+        "type": { "$ref": "#/$defs/sampleType" },
+        "from": { "$ref": "#/$defs/timestamp" },
+        "to":   { "$ref": "#/$defs/timestamp" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    },
+    "readResult": {
+      "type": "object",
+      "required": ["type", "samples"],
+      "properties": {
+        "type": { "$ref": "#/$defs/sampleType" },
+        "samples": { "type": "array", "items": { "$ref": "#/$defs/sample" } }
+      }
+    },
+
+    "writePayload": {
+      "type": "object",
+      "required": ["sample"],
+      "properties": {
+        "sample": { "$ref": "#/$defs/sample" }
+      }
+    },
+    "writeResult": {
+      "type": "object",
+      "required": ["uuid"],
+      "properties": {
+        "uuid": { "type": "string", "description": "HealthKit-assigned UUID of the saved sample." }
+      }
+    },
+
+    "syncPayload": {
+      "type": "object",
+      "required": ["types"],
+      "properties": {
+        "types": { "type": "array", "items": { "$ref": "#/$defs/sampleType" } },
+        "anchors": {
+          "type": "object",
+          "description": "Per-type opaque anchor blob (base64); missing key = full sync for that type.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "syncResultPage": {
+      "type": "object",
+      "required": ["type", "page_index", "more"],
+      "properties": {
+        "type": { "$ref": "#/$defs/sampleType" },
+        "page_index": { "type": "integer", "minimum": 0 },
+        "added":   { "type": "array", "items": { "$ref": "#/$defs/sample" } },
+        "deleted": { "type": "array", "items": { "type": "string" } },
+        "next_anchor": { "type": "string" },
+        "more": { "type": "boolean" }
+      }
+    },
+
+    "job": {
+      "type": "object",
+      "required": ["id", "kind", "created_at", "payload"],
+      "properties": {
+        "id":         { "$ref": "#/$defs/ulid" },
+        "kind":       { "type": "string", "enum": ["read", "write", "sync"] },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "deadline":   { "$ref": "#/$defs/timestamp" },
+        "payload":    { "type": "object" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["job_id", "page_index", "status"],
+      "properties": {
+        "job_id":     { "$ref": "#/$defs/ulid" },
+        "page_index": { "type": "integer", "minimum": 0 },
+        "status":     { "type": "string", "enum": ["done", "failed"] },
+        "result":     { "type": "object" },
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
