@@ -51,9 +51,9 @@ func canonicalUnitForType(t health.SampleType) string {
 	case health.DietaryWater:
 		return "mL"
 	case health.SleepAnalysis:
-		return "(category)"
+		return "s"
 	case health.Workout:
-		return "(workout)"
+		return "s"
 	default:
 		return ""
 	}

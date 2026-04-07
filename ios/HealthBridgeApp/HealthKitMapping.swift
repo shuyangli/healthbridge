@@ -18,6 +18,21 @@ enum HealthKitMapping {
         return HKObjectType.quantityType(forIdentifier: id)
     }
 
+    /// The HKSampleType for any wire SampleType — quantity, category
+    /// (sleep), or workout. Returns nil only if HealthKit on this OS
+    /// doesn't recognise the identifier (shouldn't happen for the
+    /// types we ship).
+    static func sampleObjectType(for sampleType: SampleType) -> HKSampleType? {
+        switch sampleType {
+        case .sleepAnalysis:
+            return HKObjectType.categoryType(forIdentifier: .sleepAnalysis)
+        case .workout:
+            return HKObjectType.workoutType()
+        default:
+            return quantityType(for: sampleType)
+        }
+    }
+
     static func quantityIdentifier(for sampleType: SampleType) -> HKQuantityTypeIdentifier? {
         switch sampleType {
         case .stepCount:             return .stepCount
@@ -62,7 +77,54 @@ enum HealthKitMapping {
         case .dietaryCholesterol, .dietarySodium, .dietaryCaffeine:
             return "mg"
         case .dietaryWater:                                    return "mL"
-        case .sleepAnalysis, .workout:                         return ""
+        // sleep_analysis and workout are reported as durations in
+        // seconds; the categorical / activity-type info travels in
+        // Sample.metadata.
+        case .sleepAnalysis, .workout:                         return "s"
+        }
+    }
+
+    /// Map an `HKCategoryValueSleepAnalysis` raw value to the stable
+    /// snake_case state name we put in `Sample.metadata["state"]`.
+    static func sleepStateName(forRawValue raw: Int) -> String {
+        guard let v = HKCategoryValueSleepAnalysis(rawValue: raw) else {
+            return "unknown"
+        }
+        switch v {
+        case .inBed:             return "in_bed"
+        case .asleepUnspecified: return "asleep_unspecified"
+        case .awake:             return "awake"
+        case .asleepCore:        return "asleep_core"
+        case .asleepDeep:        return "asleep_deep"
+        case .asleepREM:         return "asleep_rem"
+        @unknown default:        return "unknown"
+        }
+    }
+
+    /// Map an `HKWorkoutActivityType` to a stable snake_case name we
+    /// put in `Sample.metadata["activity_type"]`. Unknown / future
+    /// activity types fall back to `activity_<rawValue>` so the agent
+    /// can still tell them apart.
+    static func workoutActivityName(for activity: HKWorkoutActivityType) -> String {
+        switch activity {
+        case .running:                       return "running"
+        case .walking:                       return "walking"
+        case .cycling:                       return "cycling"
+        case .swimming:                      return "swimming"
+        case .yoga:                          return "yoga"
+        case .functionalStrengthTraining:    return "functional_strength_training"
+        case .traditionalStrengthTraining:   return "traditional_strength_training"
+        case .highIntensityIntervalTraining: return "hiit"
+        case .hiking:                        return "hiking"
+        case .rowing:                        return "rowing"
+        case .elliptical:                    return "elliptical"
+        case .dance:                         return "dance"
+        case .pilates:                       return "pilates"
+        case .stairClimbing:                 return "stair_climbing"
+        case .coreTraining:                  return "core_training"
+        case .mixedCardio:                   return "mixed_cardio"
+        case .other:                         return "other"
+        default:                             return "activity_\(activity.rawValue)"
         }
     }
 
@@ -89,12 +151,14 @@ enum HealthKitMapping {
         }
     }
 
-    /// Read scopes the app requests at pairing time.
+    /// Read scopes the app requests at pairing time. Includes the
+    /// sleep_analysis category type and the workout type in addition
+    /// to all quantity types.
     static func readScopes() -> Set<HKObjectType> {
         var out: Set<HKObjectType> = []
         for s in SampleType.allCases {
-            if let q = quantityType(for: s) {
-                out.insert(q)
+            if let t = sampleObjectType(for: s) {
+                out.insert(t)
             }
         }
         return out

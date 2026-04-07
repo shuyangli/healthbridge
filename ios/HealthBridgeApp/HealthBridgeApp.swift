@@ -290,31 +290,40 @@ final class AppCoordinator: ObservableObject {
     // MARK: - Read
 
     private func runReadQuery(payload: ReadPayload) async throws -> [Sample] {
+        switch payload.type {
+        case .sleepAnalysis:
+            return try await runSleepReadQuery(payload: payload)
+        case .workout:
+            return try await runWorkoutReadQuery(payload: payload)
+        default:
+            return try await runQuantityReadQuery(payload: payload)
+        }
+    }
+
+    /// Newest-first sort so that `--limit N` returns the N most recent
+    /// samples in the window. Used by every read query path.
+    private static let sortNewestFirst = NSSortDescriptor(
+        key: HKSampleSortIdentifierStartDate,
+        ascending: false
+    )
+
+    private func runQuantityReadQuery(payload: ReadPayload) async throws -> [Sample] {
         guard let qType = HealthKitMapping.quantityType(for: payload.type) else {
             throw NSError(
                 domain: "HealthBridge",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "unsupported sample type \(payload.type.rawValue) — only quantity types are wired in"]
+                userInfo: [NSLocalizedDescriptionKey: "unsupported sample type \(payload.type.rawValue)"]
             )
         }
         let unit = HealthKitMapping.unit(from: HealthKitMapping.canonicalUnit(for: payload.type))
         let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
-        // Newest-first ordering so that `--limit N` returns the N most
-        // recent samples in the window. Without an explicit sort
-        // descriptor HealthKit returns samples in unspecified order
-        // (in practice, oldest-first), which made --limit hide the
-        // recent data agents typically want.
-        let sortNewestFirst = NSSortDescriptor(
-            key: HKSampleSortIdentifierStartDate,
-            ascending: false
-        )
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Sample], Error>) in
             let q = HKSampleQuery(
                 sampleType: qType,
                 predicate: predicate,
                 limit: payload.limit ?? HKObjectQueryNoLimit,
-                sortDescriptors: [sortNewestFirst]
+                sortDescriptors: [Self.sortNewestFirst]
             ) { _, raw, error in
                 if let error = error {
                     cont.resume(throwing: error)
@@ -332,6 +341,103 @@ final class AppCoordinator: ObservableObject {
                         source: Source(
                             name: q.sourceRevision.source.name,
                             bundleID: q.sourceRevision.source.bundleIdentifier
+                        )
+                    )
+                }
+                cont.resume(returning: samples)
+            }
+            store.execute(q)
+        }
+    }
+
+    /// Read sleep_analysis samples. Each `HKCategorySample` becomes one
+    /// wire `Sample` whose `value` is the duration in seconds and whose
+    /// `metadata["state"]` is the snake_case sleep state name (e.g.
+    /// "asleep_deep", "in_bed").
+    private func runSleepReadQuery(payload: ReadPayload) async throws -> [Sample] {
+        guard let cType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+            throw NSError(
+                domain: "HealthBridge",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "sleep_analysis category type unavailable on this OS"]
+            )
+        }
+        let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Sample], Error>) in
+            let q = HKSampleQuery(
+                sampleType: cType,
+                predicate: predicate,
+                limit: payload.limit ?? HKObjectQueryNoLimit,
+                sortDescriptors: [Self.sortNewestFirst]
+            ) { _, raw, error in
+                if let error = error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                let samples: [Sample] = (raw ?? []).compactMap { obj in
+                    guard let cs = obj as? HKCategorySample else { return nil }
+                    let state = HealthKitMapping.sleepStateName(forRawValue: cs.value)
+                    let duration = cs.endDate.timeIntervalSince(cs.startDate)
+                    return Sample(
+                        uuid: cs.uuid.uuidString,
+                        type: payload.type,
+                        value: duration,
+                        unit: "s",
+                        start: cs.startDate,
+                        end: cs.endDate,
+                        metadata: ["state": AnyCodable(state)],
+                        source: Source(
+                            name: cs.sourceRevision.source.name,
+                            bundleID: cs.sourceRevision.source.bundleIdentifier
+                        )
+                    )
+                }
+                cont.resume(returning: samples)
+            }
+            store.execute(q)
+        }
+    }
+
+    /// Read workouts. Each `HKWorkout` becomes one wire `Sample` whose
+    /// `value` is the workout duration in seconds and whose metadata
+    /// carries the activity type and (optional) totals.
+    private func runWorkoutReadQuery(payload: ReadPayload) async throws -> [Sample] {
+        let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Sample], Error>) in
+            let q = HKSampleQuery(
+                sampleType: .workoutType(),
+                predicate: predicate,
+                limit: payload.limit ?? HKObjectQueryNoLimit,
+                sortDescriptors: [Self.sortNewestFirst]
+            ) { _, raw, error in
+                if let error = error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                let samples: [Sample] = (raw ?? []).compactMap { obj in
+                    guard let w = obj as? HKWorkout else { return nil }
+                    var meta: [String: AnyCodable] = [
+                        "activity_type": AnyCodable(
+                            HealthKitMapping.workoutActivityName(for: w.workoutActivityType)
+                        ),
+                    ]
+                    if let kcal = w.totalEnergyBurned?.doubleValue(for: .kilocalorie()) {
+                        meta["total_energy_burned_kcal"] = AnyCodable(kcal)
+                    }
+                    if let meters = w.totalDistance?.doubleValue(for: .meter()) {
+                        meta["total_distance_m"] = AnyCodable(meters)
+                    }
+                    return Sample(
+                        uuid: w.uuid.uuidString,
+                        type: payload.type,
+                        value: w.duration,
+                        unit: "s",
+                        start: w.startDate,
+                        end: w.endDate,
+                        metadata: meta,
+                        source: Source(
+                            name: w.sourceRevision.source.name,
+                            bundleID: w.sourceRevision.source.bundleIdentifier
                         )
                     )
                 }

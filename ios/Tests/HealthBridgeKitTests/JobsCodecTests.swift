@@ -112,6 +112,86 @@ final class JobsCodecTests: XCTestCase {
         XCTAssertFalse(str.contains("\"value\":true"), "unexpected boolean JSON value in \(str)")
     }
 
+    func testSleepAnalysisSampleRoundTrip() throws {
+        // sleep_analysis reads emit one Sample per HKCategorySample, with
+        // value=duration_seconds, unit="s", and the snake_case state in
+        // metadata["state"]. Verify the wire format round-trips through
+        // an encrypted result blob and survives a typed re-decode.
+        let session = newSession()
+        let start = ISO8601DateFormatter().date(from: "2026-04-06T23:00:00Z")!
+        let end = ISO8601DateFormatter().date(from: "2026-04-07T07:30:00Z")!
+        let sample = Sample(
+            uuid: "11111111-1111-1111-1111-111111111111",
+            type: .sleepAnalysis,
+            value: end.timeIntervalSince(start),
+            unit: "s",
+            start: start,
+            end: end,
+            metadata: ["state": AnyCodable("asleep_deep")]
+        )
+        let result = JobResult(
+            jobID: "sleep-1",
+            status: .done,
+            result: try AnyCodable.from(ReadResult(type: .sleepAnalysis, samples: [sample]))
+        )
+        let blob = try session.sealResult(jobID: "sleep-1", pageIndex: 0, result)
+        let decoded = try session.openResult(jobID: "sleep-1", pageIndex: 0, blob: blob)
+        let rr = try decoded.result!.decode(ReadResult.self)
+        XCTAssertEqual(rr.type, .sleepAnalysis)
+        XCTAssertEqual(rr.samples.count, 1)
+        XCTAssertEqual(rr.samples[0].unit, "s")
+        XCTAssertEqual(rr.samples[0].value, end.timeIntervalSince(start))
+        XCTAssertEqual(rr.samples[0].metadata?["state"]?.value as? String, "asleep_deep")
+    }
+
+    func testWorkoutSampleRoundTrip() throws {
+        // workout reads emit one Sample per HKWorkout, with value=duration,
+        // unit="s", and metadata carrying activity_type plus optional
+        // total_energy_burned_kcal / total_distance_m numerics. Verify
+        // mixed string+number metadata survives the round trip without
+        // being mangled by AnyCodable's bool-bridging trap.
+        let session = newSession()
+        let start = ISO8601DateFormatter().date(from: "2026-04-07T08:00:00Z")!
+        let end = ISO8601DateFormatter().date(from: "2026-04-07T08:32:00Z")!
+        let sample = Sample(
+            uuid: "22222222-2222-2222-2222-222222222222",
+            type: .workout,
+            value: end.timeIntervalSince(start),
+            unit: "s",
+            start: start,
+            end: end,
+            metadata: [
+                "activity_type": AnyCodable("running"),
+                "total_energy_burned_kcal": AnyCodable(312.5),
+                "total_distance_m": AnyCodable(5021.0),
+            ]
+        )
+        let result = JobResult(
+            jobID: "workout-1",
+            status: .done,
+            result: try AnyCodable.from(ReadResult(type: .workout, samples: [sample]))
+        )
+        let blob = try session.sealResult(jobID: "workout-1", pageIndex: 0, result)
+        let decoded = try session.openResult(jobID: "workout-1", pageIndex: 0, blob: blob)
+        let rr = try decoded.result!.decode(ReadResult.self)
+        XCTAssertEqual(rr.type, .workout)
+        XCTAssertEqual(rr.samples.count, 1)
+        let meta = rr.samples[0].metadata!
+        XCTAssertEqual(meta["activity_type"]?.value as? String, "running")
+        XCTAssertEqual(meta["total_energy_burned_kcal"]?.value as? Double, 312.5)
+        // Integer-valued doubles must NOT be re-encoded as bool — this
+        // is the regression guarded by 36d12f4 — and must come back as
+        // a numeric value.
+        let dist = meta["total_distance_m"]?.value
+        if let d = dist as? Double {
+            XCTAssertEqual(d, 5021.0)
+        } else if let i = dist as? Int {
+            XCTAssertEqual(Double(i), 5021.0)
+        } else {
+            XCTFail("total_distance_m did not survive as a number; got \(String(describing: dist))")
+        }
+    }
+
     func testFailedJobResultRoundTrip() throws {
         // The iOS drain loop converts per-job execution failures (e.g.
         // unsupported sample type) into a JobResult with status=.failed

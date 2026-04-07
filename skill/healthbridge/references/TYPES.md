@@ -53,10 +53,16 @@ All macronutrients use grams or milligrams as below.
 
 ## Sleep & workouts (read-only for now)
 
-| type | unit | notes |
+Both are reported as one `Sample` per HealthKit record, with `value`
+set to the **duration in seconds** and `unit` set to `s`. Categorical
+or activity-type information travels in `metadata`.
+
+| type | unit | metadata fields |
 |---|---|---|
-| `sleep_analysis` | `(category)` | Read via `healthbridge read sleep_analysis`; writes are not yet implemented. |
-| `workout` | `(workout)` | Read/sync only; structured workout writes are M5+. |
+| `sleep_analysis` | `s` | `state`: one of `in_bed`, `awake`, `asleep_unspecified`, `asleep_core`, `asleep_deep`, `asleep_rem` |
+| `workout` | `s` | `activity_type` (e.g. `running`, `cycling`, `hiit`, …), and when present `total_energy_burned_kcal` and `total_distance_m` |
+
+Writes are not yet implemented for either type.
 
 ## Picking the right type
 

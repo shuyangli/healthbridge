@@ -14,6 +14,7 @@ func TestSampleTypeIsValid(t *testing.T) {
 		{StepCount, true},
 		{DietaryEnergyConsumed, true},
 		{Workout, true},
+		{SleepAnalysis, true},
 		{"", false},
 		{"not_a_real_type", false},
 		{"STEP_COUNT", false},
