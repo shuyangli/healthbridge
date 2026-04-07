@@ -1,202 +1,113 @@
 ---
 name: healthbridge
-description: |
-  Read and write Apple Health data on the user's iPhone via the
-  healthbridge CLI. Use this skill when the user asks to log nutrition,
-  weight, or other HealthKit-tracked things, or when they ask about
-  their recent activity, workouts, sleep, or vitals. The CLI talks to
-  a tiny serverless relay that brokers encrypted job blobs between the
-  Mac and the user's iPhone — the iPhone has to be foregrounded (or
-  recently active) for jobs to drain.
+description: Read and write Apple Health data on the user's iPhone via the `healthbridge` CLI. Use this skill when the user asks to log nutrition (calories, water, macros), weight, or other HealthKit-tracked metrics, or when they ask about recent activity, workouts, sleep, or vitals. Wraps an end-to-end-encrypted relay between the Mac CLI and the HealthBridge iOS app — every job and result is sealed under a per-pair session key. Jobs only drain while the iPhone app is foregrounded; expect `pending` responses when the phone is asleep.
+license: MIT
+compatibility: Requires the `healthbridge` binary on PATH, a paired iPhone running the HealthBridge iOS app, and outbound HTTPS to the configured Cloudflare relay.
+metadata:
+  version: "0.1.0"
+  source: https://github.com/shuyangli/apple-health-cli
 ---
 
-# healthbridge — Apple Health CLI skill
+# healthbridge
 
-This skill wraps the `healthbridge` binary, which is the desktop side
-of the HealthBridge project. The iPhone runs a companion app
-("HealthBridge") that owns access to HealthKit. The two ends are paired
-via an X25519 exchange and every job/result that crosses the relay is
-encrypted with the per-pair session key — the relay never sees plaintext
-Health data.
+Drives the `healthbridge` CLI, which talks to the HealthBridge iPhone app
+via a tiny serverless relay. The relay is a dumb mailbox that sees only
+ciphertext; the iPhone is the only place plaintext HealthKit data exists.
 
-## When to invoke this skill
+## When to invoke
 
-- "Log a 500 kcal lunch" → `healthbridge write dietary_energy_consumed`
-- "How many steps did I take yesterday?" → `healthbridge read step_count`
-- "Pull all my recent workouts" → `healthbridge sync --type workout`
-- "What did I queue up earlier?" → `healthbridge jobs list`
-- "Did the breakfast log actually apply?" → `healthbridge jobs wait <id>`
+| User intent | Command |
+|---|---|
+| "Log a 500 kcal lunch" | `healthbridge write dietary_energy_consumed --value 500 --unit kcal --at now` |
+| "Drink of water (250 mL)" | `healthbridge write dietary_water --value 250 --unit mL --at now` |
+| "I weigh 73.2 kg" | `healthbridge write body_mass --value 73.2 --unit kg --at now` |
+| "Steps yesterday?" | `healthbridge read step_count --from -1d --to now` |
+| "Resting heart rate this week" | `healthbridge read heart_rate_resting --from -7d` |
+| "Pull all my recent workouts" | `healthbridge sync --type workout` |
+| "Did the meal log apply?" | `healthbridge jobs wait <id>` |
 
-## When NOT to invoke this skill
+## When NOT to invoke
 
-- The user asks about Health data on a different platform (Garmin,
-  Google Fit, Fitbit). HealthBridge only knows about Apple HealthKit.
-- The user wants to draw conclusions or coach decisions from raw data
-  — fetch with this skill first, then reason in your own response.
-- The user asks to do something destructive (delete every sample,
-  revoke a pair). Use the targeted commands and confirm first.
+- The user is asking about a non-Apple platform (Garmin, Google Fit,
+  Fitbit). HealthBridge only knows about Apple HealthKit.
+- The user wants you to *interpret* their data. Fetch with this skill
+  first, then reason in your own response.
+- The user asks to delete every sample, revoke a pair, or wipe the
+  cache. Confirm explicitly before running `wipe` or destructive
+  `scopes revoke`.
+
+## Always pass `--json`
+
+Every command supports `--json` for machine-readable output. Use it.
+Every response includes a `status` field.
 
 ## Critical contract: pending vs done
 
-Every command can return one of these statuses in its JSON output:
+| status | meaning | what to tell the user |
+|---|---|---|
+| `done` | iPhone executed the job; result is back. | "Logged X." |
+| `pending` | Relay accepted the job; iPhone hasn't drained it yet. | "Queued — will apply next time you open HealthBridge. Job ID: `<id>`." |
+| `failed` | iPhone tried and refused. `error.code` + `error.message` explain. | Surface the error. |
 
-| status    | meaning                                                                 |
-|-----------|-------------------------------------------------------------------------|
-| `done`    | The iPhone executed the job and the result is back. Tell the user.    |
-| `pending` | The relay accepted the job but the iPhone hasn't drained it yet.      |
-| `failed`  | The iPhone tried and refused. The `error` field has a code + message. |
+**Never claim a write applied if `status == "pending"`.** Remember the
+`job_id` and offer to follow up with `healthbridge jobs wait <id>`.
 
-**Never tell the user "I logged X" if the status is `pending`.** Instead
-say "I queued the write — it will apply the next time you open
-HealthBridge on your phone (job `<id>`)" and remember the job_id so you
-can follow up. Use `healthbridge jobs wait <id>` later in the same
-conversation if the user wants confirmation.
+## The two required env vars
 
-## Command reference
-
-All commands accept `--json` (recommended for agent use) and require
-`--pair <ulid>` to identify which paired iPhone to talk to. Set
-`HEALTHBRIDGE_PAIR` in your environment to avoid passing it every time.
-
-### `healthbridge read <type>`
-
-Read recent samples for one HealthKit type.
+To avoid passing `--pair` and `--relay` on every call, the user should set:
 
 ```sh
-healthbridge read step_count --from -7d --to now --json
-healthbridge read heart_rate_resting --from 2026-04-01 --json
+export HEALTHBRIDGE_PAIR=01J...        # ULID of the paired iPhone
+export HEALTHBRIDGE_RELAY=https://...  # base URL of the relay
 ```
 
-JSON output:
+If `HEALTHBRIDGE_PAIR` is unset, `healthbridge status --json` will list
+the pair records on disk; pick the most recent one.
 
-```json
-{
-  "job_id": "abc123...",
-  "status": "done",
-  "type": "step_count",
-  "samples": [
-    { "type": "step_count", "value": 8421, "unit": "count",
-      "start": "2026-04-06T00:00:00Z", "end": "2026-04-07T00:00:00Z" }
-  ]
-}
+## Command summary
+
 ```
-
-### `healthbridge write <type>`
-
-Append one sample to HealthKit.
-
-```sh
-healthbridge write dietary_energy_consumed --value 500 --unit kcal --at now --json
-healthbridge write body_mass --value 73.2 --unit kg --at 2026-04-07T08:00:00Z --json
-healthbridge write dietary_water --value 250 --unit mL --meta source=manual --json
-```
-
-Required flags: `--value`, `--unit`. The `--at` and `--end` flags accept
-RFC3339 (`2026-04-07T12:30:00Z`), `YYYY-MM-DD`, `now`, or relative
-offsets like `-1h`, `-30m`, `-7d`. Repeat `--meta key=value` to attach
-arbitrary metadata.
-
-JSON output on success:
-
-```json
-{ "job_id": "...", "status": "done", "uuid": "<healthkit-uuid>" }
-```
-
-JSON output on pending:
-
-```json
-{ "job_id": "...", "status": "pending" }
-```
-
-### `healthbridge sync [--type <t>] [--full]`
-
-Pull anchored deltas of HealthKit samples into the local SQLite cache.
-Use this for bulk operations: "give me everything for the last month"
-is much better served by `sync` than by repeated `read` calls.
-
-```sh
-healthbridge sync --json                  # all supported types
-healthbridge sync --type workout --json   # one type
-healthbridge sync --full --type body_mass # wipe anchor and re-pull
-```
-
-JSON output reports `added` and `deleted` counts. Subsequent `sync`
-calls only fetch deltas since the last anchor; expect them to be cheap.
-
-### `healthbridge jobs list|get|wait|cancel|prune`
-
-Inspect the local job mirror — the CLI's record of every job it has
-sent to the iPhone.
-
-```sh
-healthbridge jobs list --status pending
-healthbridge jobs get <id>
-healthbridge jobs wait <id> --timeout 60s
-healthbridge jobs cancel <id>
-healthbridge jobs prune --age 720h
-```
-
-`wait` long-polls the relay; if the job is still pending after the
-timeout, the row stays pending and you can call `wait` again later.
-
-### `healthbridge status`
-
-Show the pair record + scopes + relay reachability.
-
-```sh
+healthbridge read <type> [--from -7d] [--to now] [--limit N] --json
+healthbridge write <type> --value <n> --unit <u> [--at <t>] [--meta k=v] --json
+healthbridge sync [--type <t>...] [--full] --json
+healthbridge jobs list|get|wait|cancel|prune
 healthbridge status --json
-```
-
-### `healthbridge scopes list|grant|revoke`
-
-Manage the per-pair set of allowed sample types.
-
-```sh
-healthbridge scopes list
-healthbridge scopes grant dietary_energy_consumed
-healthbridge scopes revoke body_mass
-```
-
-### `healthbridge types`
-
-Print the supported sample types and their canonical units.
-
-```sh
+healthbridge scopes list|grant|revoke
 healthbridge types --json
+healthbridge pair                       # user-only; never invoke from agent
+healthbridge wipe [--yes]                # destructive; confirm first
 ```
 
-### `healthbridge pair`
+Detailed flags, JSON output shapes, sample-type catalog, and error
+codes are in [references/COMMANDS.md](references/COMMANDS.md) and
+[references/TYPES.md](references/TYPES.md). Load them on demand.
 
-Run the X25519 pairing protocol against an iOS-app-supplied link.
-Almost never invoked from an agent — the user runs this once per Mac,
-by hand, after scanning a QR code shown on their iPhone.
-
-### `healthbridge wipe`
-
-Delete every local trace of a pair. Destructive — confirm with the
-user before invoking, and pass `--yes` only if you're sure.
-
-## Example dialogues
+## Worked examples
 
 ### Logging breakfast (happy path)
 
 > User: "I had a 350 kcal granola bowl for breakfast"
->
-> Agent: runs `healthbridge write dietary_energy_consumed --value 350
-> --unit kcal --at -3h --meta source=agent --json`
->
-> Output: `{ "job_id": "01J...", "status": "done", "uuid": "..." }`
->
-> Agent: "Logged 350 kcal of granola bowl to your Health app."
+
+```sh
+healthbridge write dietary_energy_consumed \
+  --value 350 --unit kcal --at -3h \
+  --meta description="granola bowl" --meta source=agent --json
+```
+
+```json
+{ "job_id": "01J...", "status": "done", "uuid": "<healthkit-uuid>" }
+```
+
+> Agent: "Logged 350 kcal of granola bowl to Health."
 
 ### Logging breakfast (iPhone offline)
 
-> User: "Add a 350 kcal granola bowl"
->
-> Agent: runs the same command
->
-> Output: `{ "job_id": "01J...", "status": "pending" }`
->
+Same command, response is:
+
+```json
+{ "job_id": "01J...", "status": "pending" }
+```
+
 > Agent: "I queued the write — it'll apply the next time you open
 > HealthBridge on your phone. The job ID is `01J...` if you want me to
 > check on it later."
@@ -204,39 +115,54 @@ user before invoking, and pass `--yes` only if you're sure.
 ### Following up on a pending write
 
 > User: "Did the breakfast log apply yet?"
->
-> Agent: runs `healthbridge jobs wait 01J... --timeout 30s --json`
->
-> Output: `{ "status": "done", ... }`
->
-> Agent: "Yes — it just landed."
 
-### Recent activity summary
+```sh
+healthbridge jobs wait 01J... --timeout 30s --json
+```
+
+If `status == "done"`, confirm. If still `pending`, tell the user the
+phone is still asleep.
+
+### Reading recent activity
 
 > User: "How was my walking this week?"
->
-> Agent: runs `healthbridge read step_count --from -7d --json`
->
-> Then summarises the daily totals from the response.
 
-## Error codes
+```sh
+healthbridge read step_count --from -7d --json
+```
 
-When `status` is `failed` or the CLI itself returns a non-zero exit
-code, the JSON includes `{ "code": "...", "message": "..." }`. Common
-codes:
+Group the returned `samples[]` by day, sum, and present a short prose
+summary. For larger backfills, prefer `healthbridge sync --type
+step_count` (anchored delta query, much cheaper on repeat calls).
 
-| code              | meaning                                            |
-|-------------------|----------------------------------------------------|
-| `pair_incomplete` | Pairing has not finished. Tell the user to pair.   |
-| `bad_auth`        | The local pair record is stale. Re-pair.           |
-| `scope_denied`    | The requested type isn't in the granted scope set. |
-| `mailbox_full`    | The relay queue is at capacity. Try later.         |
-| `anchor_invalidated` | The cache is stale; sync --full will recover.   |
+### Logging a meal with macros
 
-## Privacy reminder
+For a meal with calories *and* macros, write each macro as a separate
+sample with the same `--at` timestamp so HealthKit groups them:
 
-The user's health data flows from the iPhone, through an encrypted
-relay, to the CLI on the Mac. The relay sees only ciphertext. The
-iPhone keeps an audit log of every job you execute. Be respectful:
-fetch only what you need, and don't read or write health data that
-hasn't been authorised by the user.
+```sh
+healthbridge write dietary_energy_consumed --value 620 --unit kcal --at now --json
+healthbridge write dietary_protein         --value 38  --unit g    --at now --json
+healthbridge write dietary_carbohydrates   --value 72  --unit g    --at now --json
+healthbridge write dietary_fat_total       --value 18  --unit g    --at now --json
+```
+
+## Privacy & safety
+
+- **The relay sees ciphertext only.** Don't send PII in `--meta` fields
+  expecting it to be private — assume it lands on the user's iPhone in
+  plaintext as part of the audit log.
+- **The iPhone keeps an audit log** of every job you run. The user can
+  review and revoke at any time.
+- **Fetch only what you need.** A 7-day step query is fine; pulling
+  every heart-rate sample for a year is rude.
+- **Confirm before destructive ops.** `wipe` and `scopes revoke` are
+  one-way doors from the agent's perspective.
+
+## Pairing is a user action
+
+`healthbridge pair` shows a QR in the terminal that the user scans with
+the HealthBridge iOS app. Never invoke `pair` from the agent — it's a
+one-time human-in-the-loop ritual. If `healthbridge status --json`
+returns `pair_incomplete` or no pair record exists, tell the user to
+run `healthbridge pair` themselves.
