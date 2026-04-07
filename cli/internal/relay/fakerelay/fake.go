@@ -24,13 +24,21 @@ import (
 type Server struct {
 	srv *httptest.Server
 
-	mu           sync.Mutex
-	jobs         []storedJob
-	results      map[string][]storedResult
-	nextSeq      int64
-	jobWaiters   []chan struct{}
-	resultWaits  map[string][]chan struct{}
-	maxLongPoll  time.Duration
+	mu          sync.Mutex
+	jobs        []storedJob
+	results     map[string][]storedResult
+	nextSeq     int64
+	jobWaiters  []chan struct{}
+	resultWaits map[string][]chan struct{}
+	maxLongPoll time.Duration
+
+	// Pair state.
+	iosPub      string
+	cliPub      string
+	authToken   string
+	completedAt int64
+	pairWaiters []chan struct{}
+	tokenSeq    int
 }
 
 type storedJob struct {
@@ -100,6 +108,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.postResult(w, r)
 	case "/v1/results|GET":
 		s.pollResults(w, r)
+	case "/v1/pair|POST":
+		s.postPair(w, r)
+	case "/v1/pair|GET":
+		s.pollPair(w, r)
 	case "/v1/pair|DELETE":
 		s.revoke(w)
 	default:
@@ -273,10 +285,16 @@ func (s *Server) revoke(w http.ResponseWriter) {
 	s.jobs = nil
 	s.results = make(map[string][]storedResult)
 	s.nextSeq = 0
+	s.iosPub = ""
+	s.cliPub = ""
+	s.authToken = ""
+	s.completedAt = 0
 	wakers := s.jobWaiters
 	s.jobWaiters = nil
 	rwakers := s.resultWaits
 	s.resultWaits = make(map[string][]chan struct{})
+	pwakers := s.pairWaiters
+	s.pairWaiters = nil
 	s.mu.Unlock()
 	for _, c := range wakers {
 		close(c)
@@ -286,7 +304,113 @@ func (s *Server) revoke(w http.ResponseWriter) {
 			close(c)
 		}
 	}
+	for _, c := range pwakers {
+		close(c)
+	}
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+func (s *Server) postPair(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Side   string `json:"side"`
+		Pubkey string `json:"pubkey"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid_json", err.Error())
+		return
+	}
+	if body.Pubkey == "" {
+		writeErr(w, 400, "missing_pubkey", "pubkey required")
+		return
+	}
+	if body.Side != "ios" && body.Side != "cli" {
+		writeErr(w, 400, "invalid_side", "side must be ios or cli")
+		return
+	}
+	s.mu.Lock()
+	switch body.Side {
+	case "ios":
+		if s.iosPub != "" && s.iosPub != body.Pubkey {
+			s.mu.Unlock()
+			writeErr(w, 409, "pair_locked", "ios pubkey already committed")
+			return
+		}
+		s.iosPub = body.Pubkey
+	case "cli":
+		if s.cliPub != "" && s.cliPub != body.Pubkey {
+			s.mu.Unlock()
+			writeErr(w, 409, "pair_locked", "cli pubkey already committed")
+			return
+		}
+		s.cliPub = body.Pubkey
+	}
+	if s.iosPub != "" && s.cliPub != "" && s.authToken == "" {
+		s.tokenSeq++
+		s.authToken = fmt.Sprintf("token-%d", s.tokenSeq)
+		s.completedAt = time.Now().UnixMilli()
+		wakers := s.pairWaiters
+		s.pairWaiters = nil
+		s.mu.Unlock()
+		for _, c := range wakers {
+			close(c)
+		}
+		s.writePair(w, 201)
+		return
+	}
+	s.mu.Unlock()
+	s.writePair(w, 201)
+}
+
+func (s *Server) pollPair(w http.ResponseWriter, r *http.Request) {
+	waitMs := parseInt64(r.URL.Query().Get("wait_ms"))
+	s.mu.Lock()
+	if s.authToken != "" || waitMs == 0 {
+		s.mu.Unlock()
+		s.writePair(w, 200)
+		return
+	}
+	wake := make(chan struct{})
+	s.pairWaiters = append(s.pairWaiters, wake)
+	maxWait := s.maxLongPoll
+	s.mu.Unlock()
+	wait := time.Duration(waitMs) * time.Millisecond
+	if wait > maxWait {
+		wait = maxWait
+	}
+	select {
+	case <-wake:
+	case <-time.After(wait):
+	case <-r.Context().Done():
+		return
+	}
+	s.writePair(w, 200)
+}
+
+// writePair takes the lock briefly to read the current state and emit it.
+func (s *Server) writePair(w http.ResponseWriter, status int) {
+	s.mu.Lock()
+	body := map[string]any{
+		"ios_pub":      nilIfEmpty(s.iosPub),
+		"cli_pub":      nilIfEmpty(s.cliPub),
+		"auth_token":   nilIfEmpty(s.authToken),
+		"completed_at": nilIfZero(s.completedAt),
+	}
+	s.mu.Unlock()
+	writeJSON(w, status, body)
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nilIfZero(n int64) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 // ---- helpers ------------------------------------------------------------

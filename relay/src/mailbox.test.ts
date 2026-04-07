@@ -198,6 +198,74 @@ describe("Mailbox.revoke", () => {
   });
 });
 
+describe("Mailbox.postPubkey / pollPair", () => {
+  let counter = 0;
+  const fakeToken = () => `token-${++counter}`;
+
+  beforeEach(() => {
+    counter = 0;
+  });
+
+  it("returns auth_token only after both sides commit", () => {
+    const mb = new Mailbox(fakeDeps());
+    let state = mb.postPubkey("ios", "ios-pub", fakeToken);
+    expect(state.iosPub).toBe("ios-pub");
+    expect(state.cliPub).toBeUndefined();
+    expect(state.authToken).toBeUndefined();
+
+    state = mb.postPubkey("cli", "cli-pub", fakeToken);
+    expect(state.cliPub).toBe("cli-pub");
+    expect(state.authToken).toBe("token-1");
+  });
+
+  it("rejects a different pubkey for the same side once committed", () => {
+    const mb = new Mailbox(fakeDeps());
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    expectMailboxError(() => mb.postPubkey("ios", "ios-other", fakeToken), "pair_locked", 409);
+  });
+
+  it("posting the identical pubkey twice is idempotent", () => {
+    const mb = new Mailbox(fakeDeps());
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    expect(() => mb.postPubkey("ios", "ios-pub", fakeToken)).not.toThrow();
+  });
+
+  it("does not regenerate auth_token after completion", () => {
+    const mb = new Mailbox(fakeDeps());
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    mb.postPubkey("cli", "cli-pub", fakeToken);
+    const before = mb.getPair().authToken;
+    // Re-posting same pubkeys should not mint a fresh token.
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    expect(mb.getPair().authToken).toBe(before);
+  });
+
+  it("pollPair blocks until both sides have posted", async () => {
+    const mb = new Mailbox(fakeDeps());
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    const promise = mb.pollPair(60_000);
+    setTimeout(() => mb.postPubkey("cli", "cli-pub", fakeToken), 0);
+    const state = await promise;
+    expect(state.authToken).toBe("token-1");
+  });
+
+  it("pollPair returns immediately if already complete", async () => {
+    const mb = new Mailbox(fakeDeps());
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    mb.postPubkey("cli", "cli-pub", fakeToken);
+    const state = await mb.pollPair(0);
+    expect(state.authToken).toBe("token-1");
+  });
+
+  it("revoke wipes pair state", () => {
+    const mb = new Mailbox(fakeDeps());
+    mb.postPubkey("ios", "ios-pub", fakeToken);
+    mb.postPubkey("cli", "cli-pub", fakeToken);
+    mb.revoke();
+    expect(mb.getPair()).toEqual({});
+  });
+});
+
 describe("Mailbox.snapshot/restore", () => {
   it("preserves jobs, results, and the seq counter", () => {
     const a = new Mailbox(fakeDeps(2000));

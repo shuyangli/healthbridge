@@ -17,6 +17,22 @@ export const MAX_RESULT_PAGES_PER_JOB = 1024;
 export const MAX_BLOB_BYTES = 1 * 1024 * 1024; // 1 MiB per blob
 
 /**
+ * Pairing state held by the relay during the X25519 exchange. Both sides
+ * post their pubkey to /v1/pair; once both are present the relay generates
+ * an auth_token that both sides retrieve and use as a Bearer credential
+ * on every subsequent request.
+ *
+ * The relay never sees the session key derived from these pubkeys.
+ */
+export interface PairState {
+  iosPub?: string;
+  cliPub?: string;
+  authToken?: string;
+  /** ms timestamp of when the second pubkey was committed. */
+  completedAt?: number;
+}
+
+/**
  * Stored job blob. The relay never inspects `blob` — for M1 it's plaintext
  * base64; for M2+ it's XChaCha20-Poly1305 ciphertext.
  */
@@ -92,27 +108,100 @@ export class Mailbox {
   private nextSeq = 1;
   private jobs: StoredJob[] = [];
   private results: StoredResult[] = [];
+  private pair: PairState = {};
   /** Resolvers waiting on new jobs (CLI side: iOS app long-poll). */
   private jobWaiters: Array<() => void> = [];
   /** Resolvers waiting on new results, keyed by jobId (CLI side). */
   private resultWaiters = new Map<string, Array<() => void>>();
+  /** Resolvers waiting on pair completion (both sides during pairing). */
+  private pairWaiters: Array<() => void> = [];
 
   constructor(private deps: MailboxDeps = realDeps) {}
 
   /** For tests / persistence. */
-  snapshot(): { jobs: StoredJob[]; results: StoredResult[]; nextSeq: number } {
+  snapshot(): {
+    jobs: StoredJob[];
+    results: StoredResult[];
+    nextSeq: number;
+    pair: PairState;
+  } {
     return {
       jobs: structuredClone(this.jobs),
       results: structuredClone(this.results),
       nextSeq: this.nextSeq,
+      pair: structuredClone(this.pair),
     };
   }
 
   /** For tests / persistence — restore from a previous snapshot. */
-  restore(snap: { jobs: StoredJob[]; results: StoredResult[]; nextSeq: number }) {
+  restore(snap: {
+    jobs: StoredJob[];
+    results: StoredResult[];
+    nextSeq: number;
+    pair?: PairState;
+  }) {
     this.jobs = structuredClone(snap.jobs);
     this.results = structuredClone(snap.results);
     this.nextSeq = snap.nextSeq;
+    this.pair = snap.pair ? structuredClone(snap.pair) : {};
+  }
+
+  // ---- Pairing -------------------------------------------------------
+
+  /**
+   * Commit one side's pubkey. Returns the current PairState (with the
+   * auth_token set if both sides are now present). The same side cannot
+   * post twice — that's a 409 to prevent an attacker from rotating a
+   * legitimate pairing.
+   */
+  postPubkey(side: "ios" | "cli", pubkey: string, generateToken: () => string): PairState {
+    if (typeof pubkey !== "string" || pubkey.length === 0) {
+      throw new MailboxError("invalid_pubkey", "pubkey required");
+    }
+    if (side === "ios") {
+      if (this.pair.iosPub && this.pair.iosPub !== pubkey) {
+        throw new MailboxError("pair_locked", "ios pubkey already committed", 409);
+      }
+      this.pair.iosPub = pubkey;
+    } else {
+      if (this.pair.cliPub && this.pair.cliPub !== pubkey) {
+        throw new MailboxError("pair_locked", "cli pubkey already committed", 409);
+      }
+      this.pair.cliPub = pubkey;
+    }
+    if (this.pair.iosPub && this.pair.cliPub && !this.pair.authToken) {
+      this.pair.authToken = generateToken();
+      this.pair.completedAt = this.deps.now();
+      this.wakePairWaiters();
+    }
+    return structuredClone(this.pair);
+  }
+
+  /** Read the current pair state. Used by both sides to retrieve the auth_token. */
+  getPair(): PairState {
+    return structuredClone(this.pair);
+  }
+
+  /**
+   * Long-poll for pair completion. Returns immediately if the auth_token
+   * is already set; otherwise waits up to maxWaitMs for the second side
+   * to commit its pubkey.
+   */
+  async pollPair(maxWaitMs: number): Promise<PairState> {
+    if (this.pair.authToken || maxWaitMs <= 0) {
+      return structuredClone(this.pair);
+    }
+    const wake = new Promise<void>((resolve) => {
+      this.pairWaiters.push(resolve);
+    });
+    await this.deps.wait(maxWaitMs, wake);
+    return structuredClone(this.pair);
+  }
+
+  private wakePairWaiters() {
+    const waiters = this.pairWaiters;
+    this.pairWaiters = [];
+    for (const w of waiters) w();
   }
 
   /**
@@ -264,8 +353,10 @@ export class Mailbox {
     this.jobs = [];
     this.results = [];
     this.nextSeq = 1;
+    this.pair = {};
     // Wake any in-flight pollers so they observe the empty state.
     this.wakeJobWaiters();
+    this.wakePairWaiters();
     for (const waiters of this.resultWaiters.values()) {
       for (const w of waiters) w();
     }

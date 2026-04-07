@@ -55,6 +55,12 @@ export async function handleRequest(
     if (path === "/v1/results" && method === "GET") {
       return await getResults(url, mailbox, longPollMs);
     }
+    if (path === "/v1/pair" && method === "POST") {
+      return await postPair(request, mailbox);
+    }
+    if (path === "/v1/pair" && method === "GET") {
+      return await getPair(url, mailbox, longPollMs);
+    }
     if (path === "/v1/pair" && method === "DELETE") {
       mailbox.revoke();
       return jsonResponse(200, { ok: true });
@@ -148,6 +154,45 @@ async function getResults(
       expires_at: r.expiresAt,
     })),
   });
+}
+
+async function postPair(request: Request, mailbox: Mailbox): Promise<Response> {
+  const body = await readJson<{ side?: unknown; pubkey?: unknown }>(request);
+  const side = requireString(body.side, "side");
+  if (side !== "ios" && side !== "cli") {
+    throw new BadRequestError("invalid_side", "side must be 'ios' or 'cli'");
+  }
+  const pubkey = requireString(body.pubkey, "pubkey");
+  const state = mailbox.postPubkey(side, pubkey, generateAuthToken);
+  return jsonResponse(201, {
+    ios_pub: state.iosPub ?? null,
+    cli_pub: state.cliPub ?? null,
+    auth_token: state.authToken ?? null,
+    completed_at: state.completedAt ?? null,
+  });
+}
+
+async function getPair(url: URL, mailbox: Mailbox, longPollMs: number): Promise<Response> {
+  const wait = parseIntParam(url, "wait_ms", 0);
+  const state = await mailbox.pollPair(Math.min(wait, longPollMs));
+  return jsonResponse(200, {
+    ios_pub: state.iosPub ?? null,
+    cli_pub: state.cliPub ?? null,
+    auth_token: state.authToken ?? null,
+    completed_at: state.completedAt ?? null,
+  });
+}
+
+/**
+ * generateAuthToken returns a 32-byte random Bearer token rendered as
+ * lowercase hex. The default uses Web Crypto, which exists on both
+ * Cloudflare Workers and modern Node — but tests inject their own to keep
+ * outputs deterministic.
+ */
+export function generateAuthToken(): string {
+  const buf = new Uint8Array(32);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function readJson<T>(request: Request): Promise<T> {

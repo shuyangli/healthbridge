@@ -165,6 +165,48 @@ describe("GET /v1/results (long-poll)", () => {
   });
 });
 
+describe("POST /v1/pair", () => {
+  it("commits ios pubkey first, then cli pubkey, returning auth_token", async () => {
+    const mb = newMailbox();
+    let res = await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-pub" }, mb);
+    expect(res.status).toBe(201);
+    expect(res.body.ios_pub).toBe("ios-pub");
+    expect(res.body.auth_token).toBeNull();
+
+    res = await call("POST", "/v1/pair", { side: "cli", pubkey: "cli-pub" }, mb);
+    expect(res.status).toBe(201);
+    expect(res.body.cli_pub).toBe("cli-pub");
+    expect(typeof res.body.auth_token).toBe("string");
+    expect(res.body.auth_token.length).toBe(64); // 32 bytes hex
+  });
+
+  it("rejects an invalid side", async () => {
+    const { status, body } = await call("POST", "/v1/pair", { side: "watch", pubkey: "p" });
+    expect(status).toBe(400);
+    expect(body.code).toBe("invalid_side");
+  });
+
+  it("rejects a different pubkey for an already-committed side", async () => {
+    const mb = newMailbox();
+    await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-1" }, mb);
+    const { status, body } = await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-2" }, mb);
+    expect(status).toBe(409);
+    expect(body.code).toBe("pair_locked");
+  });
+});
+
+describe("GET /v1/pair", () => {
+  it("returns the current state without long-poll", async () => {
+    const mb = newMailbox();
+    await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-pub" }, mb);
+    const { status, body } = await call("GET", "/v1/pair", undefined, mb);
+    expect(status).toBe(200);
+    expect(body.ios_pub).toBe("ios-pub");
+    expect(body.cli_pub).toBeNull();
+    expect(body.auth_token).toBeNull();
+  });
+});
+
 describe("DELETE /v1/pair", () => {
   it("revokes the mailbox", async () => {
     const mb = newMailbox();

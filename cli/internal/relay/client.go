@@ -167,6 +167,38 @@ func (c *Client) RevokePair(ctx context.Context) error {
 	return c.do(ctx, "DELETE", "/v1/pair", nil, nil, nil)
 }
 
+// PairState mirrors the relay's /v1/pair response. Fields are pointers so
+// "not yet committed" reads as JSON null.
+type PairState struct {
+	IOSPub      *string `json:"ios_pub"`
+	CLIPub      *string `json:"cli_pub"`
+	AuthToken   *string `json:"auth_token"`
+	CompletedAt *int64  `json:"completed_at"`
+}
+
+// PostPubkey commits one side's X25519 pubkey to the relay's pair record.
+// Returns the (possibly partially-filled) pair state.
+func (c *Client) PostPubkey(ctx context.Context, side, pubkeyHex string) (*PairState, error) {
+	body := map[string]any{"side": side, "pubkey": pubkeyHex}
+	var out PairState
+	if err := c.do(ctx, "POST", "/v1/pair", nil, body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PollPair long-polls the /v1/pair endpoint until both sides have
+// committed (or until waitMs elapses).
+func (c *Client) PollPair(ctx context.Context, waitMs int) (*PairState, error) {
+	q := url.Values{}
+	q.Set("wait_ms", fmt.Sprintf("%d", waitMs))
+	var out PairState
+	if err := c.do(ctx, "GET", "/v1/pair", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // do is the lone HTTP plumbing point.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
 	if c.PairID == "" {
