@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>HealthBridge</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleName</key>
+    <string>HealthBridge</string>
+    <key>CFBundlePackageType</key>
+    <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+        <string>healthkit</string>
+    </array>
+    <key>UILaunchScreen</key>
+    <dict/>
+
+    <!-- Required by HealthKit. The strings here are user-facing and must
+         match what the App Store privacy review expects. The wording is
+         deliberately specific about who the data goes to (the local agent
+         on a paired Mac) — this is the consent surface for guideline 5.1.2(i). -->
+    <key>NSHealthShareUsageDescription</key>
+    <string>HealthBridge shares the Health data you select with the AI agent running on your paired Mac. Nothing is sent to a third-party server in plaintext — all data is end-to-end encrypted between this phone and your Mac via the relay.</string>
+    <key>NSHealthUpdateUsageDescription</key>
+    <string>HealthBridge writes nutrition, water, and other entries on behalf of the AI agent on your paired Mac, for the data types you authorise.</string>
+</dict>
+</plist>

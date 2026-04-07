@@ -11,9 +11,12 @@ relay/.wrangler/
 relay/dist/
 relay/.dev.vars
 
-# Xcode
+# Xcode + SwiftPM
 ios/build/
 ios/DerivedData/
+ios/.build/
+ios/.swiftpm/
+ios/Package.resolved
 ios/*.xcuserdata/
 ios/**/xcuserdata/
 ios/**/*.xcuserstate
