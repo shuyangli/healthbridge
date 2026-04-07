@@ -299,13 +299,22 @@ final class AppCoordinator: ObservableObject {
         }
         let unit = HealthKitMapping.unit(from: HealthKitMapping.canonicalUnit(for: payload.type))
         let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
+        // Newest-first ordering so that `--limit N` returns the N most
+        // recent samples in the window. Without an explicit sort
+        // descriptor HealthKit returns samples in unspecified order
+        // (in practice, oldest-first), which made --limit hide the
+        // recent data agents typically want.
+        let sortNewestFirst = NSSortDescriptor(
+            key: HKSampleSortIdentifierStartDate,
+            ascending: false
+        )
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Sample], Error>) in
             let q = HKSampleQuery(
                 sampleType: qType,
                 predicate: predicate,
                 limit: payload.limit ?? HKObjectQueryNoLimit,
-                sortDescriptors: nil
+                sortDescriptors: [sortNewestFirst]
             ) { _, raw, error in
                 if let error = error {
                     cont.resume(throwing: error)
