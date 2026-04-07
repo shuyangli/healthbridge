@@ -258,6 +258,13 @@ func (s *Store) Prune(olderThan time.Time) (int, error) {
 	return int(n), nil
 }
 
+// WipePair deletes every job belonging to the given pair, regardless of
+// status. Used by `healthbridge wipe`.
+func (s *Store) WipePair(pairID string) error {
+	_, err := s.db.Exec(`DELETE FROM jobs WHERE pair_id = ?`, pairID)
+	return err
+}
+
 // ExpireOverdue moves any pending job whose deadline has passed into
 // status=expired. Returns the number of rows touched.
 func (s *Store) ExpireOverdue(now time.Time) (int, error) {

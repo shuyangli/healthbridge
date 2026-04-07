@@ -29,6 +29,8 @@ func Root() *cobra.Command {
 	root.AddCommand(newScopesCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newJobsCmd())
+	root.AddCommand(newSyncCmd())
+	root.AddCommand(newWipeCmd())
 	return root
 }
 

@@ -10,8 +10,15 @@ import (
 )
 
 // JobHandler is what the fake iOS app side runs against each decoded job.
-// Tests provide one to assert on the payload and produce a result.
+// Returns a *health.Result for single-page jobs (read, write); use
+// MultiPageJobHandler for sync jobs that may produce many pages keyed to
+// the same job_id.
 type JobHandler func(ctx context.Context, job *health.Job) (*health.Result, error)
+
+// MultiPageJobHandler is the variant for sync-style jobs that may emit
+// multiple result pages. Each entry will be posted as its own /v1/results
+// blob with its own page_index.
+type MultiPageJobHandler func(ctx context.Context, job *health.Job) ([]*health.Result, error)
 
 // FakeIOSDrainer mimics the iOS HealthBridge app: it long-polls the relay
 // for jobs, decodes each one, runs a handler, and posts the result back.
@@ -23,13 +30,22 @@ type FakeIOSDrainer struct {
 	Client  *relay.Client
 	Session *jobs.Session
 	Handler JobHandler
-	cursor  int64
+	// MultiPage is consulted first; falls back to Handler when nil.
+	// If MultiPage returns an error, the drainer wraps it as a failed
+	// page just like Handler errors.
+	MultiPage MultiPageJobHandler
+	cursor    int64
 }
 
 // NewDrainer wires a drainer to an existing relay client and a session
 // holding the shared key. The handler will be called once per drained job.
 func NewDrainer(c *relay.Client, s *jobs.Session, h JobHandler) *FakeIOSDrainer {
 	return &FakeIOSDrainer{Client: c, Session: s, Handler: h}
+}
+
+// NewMultiPageDrainer is the multi-page variant used by sync scenario tests.
+func NewMultiPageDrainer(c *relay.Client, s *jobs.Session, h MultiPageJobHandler) *FakeIOSDrainer {
+	return &FakeIOSDrainer{Client: c, Session: s, MultiPage: h}
 }
 
 // Run loops until ctx is cancelled. Each iteration polls for one batch of
@@ -62,24 +78,44 @@ func (d *FakeIOSDrainer) processOne(ctx context.Context, jb relay.JobBlob) error
 	if err != nil {
 		return fmt.Errorf("drainer: open job %s: %w", jb.JobID, err)
 	}
-	res, err := d.Handler(ctx, job)
+	pages, err := d.runHandler(ctx, job)
 	if err != nil {
-		// Wrap the handler error as a structured failed result so the CLI
-		// side sees the same shape it would in production.
-		res = &health.Result{
+		pages = []*health.Result{{
 			Status: health.StatusFailed,
 			Error: &health.JobError{
 				Code:    "handler_error",
 				Message: err.Error(),
 			},
+		}}
+	}
+	for i, res := range pages {
+		// If the handler returned a result without explicitly setting
+		// PageIndex, fall back to the order in the slice.
+		pageIndex := res.PageIndex
+		if pageIndex == 0 && i > 0 {
+			pageIndex = i
+		}
+		blob, err := d.Session.SealResult(job.ID, pageIndex, res)
+		if err != nil {
+			return fmt.Errorf("drainer: seal result: %w", err)
+		}
+		if _, err := d.Client.PostResult(ctx, job.ID, pageIndex, blob); err != nil {
+			return fmt.Errorf("drainer: post result: %w", err)
 		}
 	}
-	blob, err := d.Session.SealResult(job.ID, res.PageIndex, res)
-	if err != nil {
-		return fmt.Errorf("drainer: seal result: %w", err)
-	}
-	if _, err := d.Client.PostResult(ctx, job.ID, res.PageIndex, blob); err != nil {
-		return fmt.Errorf("drainer: post result: %w", err)
-	}
 	return nil
+}
+
+func (d *FakeIOSDrainer) runHandler(ctx context.Context, job *health.Job) ([]*health.Result, error) {
+	if d.MultiPage != nil {
+		return d.MultiPage(ctx, job)
+	}
+	if d.Handler != nil {
+		res, err := d.Handler(ctx, job)
+		if err != nil {
+			return nil, err
+		}
+		return []*health.Result{res}, nil
+	}
+	return nil, fmt.Errorf("drainer: no handler configured")
 }
