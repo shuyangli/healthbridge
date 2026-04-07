@@ -50,7 +50,7 @@ final class AppCoordinator: ObservableObject {
         case denied(String)
     }
 
-    @Published var status: String = "Tap “Connect to HealthKit” to begin."
+    @Published var status: String = "Starting up…"
     @Published var lastError: String?
     @Published var drainedCount: Int = 0
     @Published var auth: AuthState = .unknown
@@ -70,9 +70,16 @@ final class AppCoordinator: ObservableObject {
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            // If we're already authorised AND paired, restart the drain
-            // loop on foreground. Don't auto-request auth — that's a
-            // button.
+            // First-launch: as soon as the scene goes active, ask HealthKit
+            // for permission. We deliberately do NOT do this from .onAppear
+            // — the system permission sheet will not present unless the
+            // scene is fully active, which is exactly what this callback
+            // signals. Once the user has answered (authorized or denied)
+            // we never re-prompt automatically; the .denied UI shows a
+            // retry button.
+            if case .unknown = auth {
+                requestAuthorizationFromUser()
+            }
             if case .authorized = auth, pair != nil {
                 startDrainLoopIfNeeded()
             }
@@ -183,31 +190,64 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    private func drainLoop(pair: StoredPair) async throws {
-        guard let relayURL = URL(string: pair.relayURL) else {
+    private func drainLoop(pair startingPair: StoredPair) async throws {
+        guard let relayURL = URL(string: startingPair.relayURL) else {
             self.status = "Invalid relay URL in stored pair."
             return
         }
-        guard let keyBytes = Data(hexString: pair.sessionKeyHex), keyBytes.count == 32 else {
+        guard let keyBytes = Data(hexString: startingPair.sessionKeyHex), keyBytes.count == 32 else {
             self.status = "Invalid session key in stored pair — re-pair from your Mac."
             return
         }
-        let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: pair.pairID)
-        let client = RelayClient(baseURL: relayURL, pairID: pair.pairID, authToken: pair.authToken)
+        let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: startingPair.pairID)
+        let client = RelayClient(baseURL: relayURL, pairID: startingPair.pairID, authToken: startingPair.authToken)
 
-        var cursor: Int64 = 0
+        // Resume from the highest seq we've already drained, persisted in
+        // the pair record. This is what makes a foreground/background
+        // cycle (or a process restart) idempotent — without it, we'd
+        // re-execute every job in the relay's mailbox and double-save
+        // HealthKit samples on every wake.
+        var cursor: Int64 = startingPair.lastDrainedSeq
+        log.info("drainLoop start cursor=\(cursor, privacy: .public)")
         while !Task.isCancelled {
             let page = try await client.pollJobs(since: cursor, waitMs: 25_000)
             for jb in page.jobs {
-                let job = try session.openJob(jobID: jb.jobID, blob: jb.blob)
-                let result = try await self.execute(job: job)
-                let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
-                _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
-                self.drainedCount += 1
+                do {
+                    let job = try session.openJob(jobID: jb.jobID, blob: jb.blob)
+                    let result = try await self.execute(job: job)
+                    let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
+                    _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
+                    self.drainedCount += 1
+                } catch let err as RelayClient.RelayError where err.code == "duplicate_result_page" {
+                    // We crashed (or this loop restarted) between executing
+                    // and persisting the cursor for this seq. The relay
+                    // already has the result page; advance the cursor and
+                    // move on rather than getting stuck.
+                    log.info("tolerating duplicate_result_page for seq=\(jb.seq, privacy: .public) — advancing cursor")
+                }
+                // Persist after every job, not just at the end of the
+                // page, so a crash mid-page doesn't replay earlier jobs.
+                cursor = jb.seq
+                self.advanceCursor(to: jb.seq)
             }
             if page.nextCursor > cursor {
                 cursor = page.nextCursor
+                self.advanceCursor(to: page.nextCursor)
             }
+        }
+    }
+
+    /// Update the in-memory + on-disk drain cursor for the active pair.
+    /// Failure to persist is logged but non-fatal — the next successful
+    /// save will catch up.
+    private func advanceCursor(to seq: Int64) {
+        guard var p = self.pair, seq > p.lastDrainedSeq else { return }
+        p.lastDrainedSeq = seq
+        self.pair = p
+        do {
+            try PairStorage.save(p)
+        } catch {
+            log.error("failed to persist drain cursor: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -316,7 +356,15 @@ struct ContentView: View {
                 .padding(.horizontal)
 
             switch coordinator.auth {
-            case .unknown, .denied:
+            case .unknown:
+                // The auto-prompt fires from scenePhaseChanged the moment
+                // the scene goes active; .unknown is just the brief
+                // window before that callback runs.
+                ProgressView()
+
+            case .denied:
+                // The user explicitly declined; offer a retry button
+                // rather than re-prompting on every foreground.
                 Button(action: { coordinator.requestAuthorizationFromUser() }) {
                     Text("Connect to HealthKit")
                         .padding(.horizontal, 20)

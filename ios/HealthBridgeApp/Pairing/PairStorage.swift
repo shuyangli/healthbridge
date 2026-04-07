@@ -33,6 +33,12 @@ struct StoredPair: Codable, Equatable {
     var cliPubHex: String
     var sas: String
     var pairedAt: Date
+    /// Highest job seq the iOS side has fully drained. Persisted across
+    /// app restarts so a foreground/background cycle does not replay
+    /// already-applied jobs (which would, for write jobs, double-save
+    /// HealthKit samples and trip the relay's duplicate_result_page
+    /// guard). Default 0 = "haven't drained anything yet".
+    var lastDrainedSeq: Int64
 
     enum CodingKeys: String, CodingKey {
         case pairID = "pair_id"
@@ -43,6 +49,7 @@ struct StoredPair: Codable, Equatable {
         case cliPubHex = "cli_pub_hex"
         case sas
         case pairedAt = "paired_at"
+        case lastDrainedSeq = "last_drained_seq"
     }
 
     init(from result: PairResult, pairedAt: Date = Date()) {
@@ -54,6 +61,22 @@ struct StoredPair: Codable, Equatable {
         self.cliPubHex = result.cliPub.hexString
         self.sas = result.sas
         self.pairedAt = pairedAt
+        self.lastDrainedSeq = 0
+    }
+
+    // Custom decode so old pair.json files (written before
+    // last_drained_seq existed) still load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.pairID = try c.decode(String.self, forKey: .pairID)
+        self.relayURL = try c.decode(String.self, forKey: .relayURL)
+        self.sessionKeyHex = try c.decode(String.self, forKey: .sessionKeyHex)
+        self.authToken = try c.decode(String.self, forKey: .authToken)
+        self.iosPubHex = try c.decode(String.self, forKey: .iosPubHex)
+        self.cliPubHex = try c.decode(String.self, forKey: .cliPubHex)
+        self.sas = try c.decode(String.self, forKey: .sas)
+        self.pairedAt = try c.decode(Date.self, forKey: .pairedAt)
+        self.lastDrainedSeq = try c.decodeIfPresent(Int64.self, forKey: .lastDrainedSeq) ?? 0
     }
 }
 
