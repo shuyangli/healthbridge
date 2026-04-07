@@ -12,9 +12,6 @@ The relay is dumb store-and-forward and never sees plaintext Health data —
 all jobs and results are end-to-end encrypted between the CLI and the iOS app
 with a key established at pairing time.
 
-See [`/Users/shuyangli/.claude/plans/curried-strolling-hanrahan.md`](/Users/shuyangli/.claude/plans/curried-strolling-hanrahan.md)
-for the full design.
-
 ## Layout
 
 ```
