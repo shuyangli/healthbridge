@@ -25,6 +25,21 @@ proto/               Shared JSON schemas — single source of truth for wire typ
 skill/healthbridge/  Agent skill package wrapping the CLI
 ```
 
+## Install the CLI
+
+Requires Go 1.26+.
+
+```sh
+go install github.com/shuyangli/healthbridge/cli/cmd/healthbridge@latest
+export PATH="$HOME/go/bin:$PATH"
+
+healthbridge pair --relay https://healthbridge.shuyang-li.workers.dev
+# scan the QR with the HealthBridge iOS app
+```
+
+See [`cli/README.md`](cli/README.md) for the full install, configure,
+and first-run walkthrough.
+
 ## Status
 
 Implementation in progress. Milestones:
