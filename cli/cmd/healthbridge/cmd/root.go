@@ -19,7 +19,7 @@ func Root() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().String("relay", defaultRelayURL(), "Base URL of the healthbridge relay")
-	root.PersistentFlags().String("pair", "", "Pair ID (26-char ULID) to talk to. Required until pairing lands in M2.")
+	root.PersistentFlags().String("pair", defaultPairID(), "Pair ID (26-char ULID) to talk to. Defaults to the last successful `healthbridge pair`.")
 	root.PersistentFlags().Duration("wait", 0, "How long to long-poll for a result before returning pending. 0 = use the default.")
 	root.PersistentFlags().Bool("json", false, "Emit machine-readable JSON instead of human output")
 
@@ -48,5 +48,18 @@ func defaultRelayURL() string {
 	if v := envOrEmpty("HEALTHBRIDGE_RELAY"); v != "" {
 		return v
 	}
+	if cfg, err := loadDefaultConfig(); err == nil && cfg.RelayURL != "" {
+		return cfg.RelayURL
+	}
 	return "http://127.0.0.1:8787"
+}
+
+func defaultPairID() string {
+	if v := envOrEmpty("HEALTHBRIDGE_PAIR"); v != "" {
+		return v
+	}
+	if cfg, err := loadDefaultConfig(); err == nil {
+		return cfg.PairID
+	}
+	return ""
 }

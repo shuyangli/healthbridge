@@ -124,7 +124,10 @@ func runPair(c *cobra.Command, _ []string) error {
 	if err := config.SavePair(configDir(), rec); err != nil {
 		return fmt.Errorf("save pair: %w", err)
 	}
-	fmt.Fprintf(out, "\npaired successfully — pair_id=%s\nsession saved under %s\n", result.PairID, configDir())
+	if err := saveDefaultConfig(rec); err != nil {
+		return fmt.Errorf("save default config: %w", err)
+	}
+	fmt.Fprintf(out, "\npaired successfully — pair_id=%s\nsession saved under %s\ndefaults saved under %s\n", result.PairID, configDir(), defaultConfigPath())
 	return nil
 }
 
@@ -142,14 +145,14 @@ func newPairID() (string, error) {
 // quiet zone of 1 cell on each side.
 func renderQR(out io.Writer, payload string) error {
 	cfg := qrterminal.Config{
-		Level:      qrterminal.L,
-		Writer:     out,
-		HalfBlocks: true,
-		BlackChar:  qrterminal.BLACK_BLACK,
-		WhiteChar:  qrterminal.WHITE_WHITE,
+		Level:          qrterminal.L,
+		Writer:         out,
+		HalfBlocks:     true,
+		BlackChar:      qrterminal.BLACK_BLACK,
+		WhiteChar:      qrterminal.WHITE_WHITE,
 		BlackWhiteChar: qrterminal.BLACK_WHITE,
 		WhiteBlackChar: qrterminal.WHITE_BLACK,
-		QuietZone:  1,
+		QuietZone:      1,
 	}
 	qrterminal.GenerateWithConfig(payload, cfg)
 	return nil

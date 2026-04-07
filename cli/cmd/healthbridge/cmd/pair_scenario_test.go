@@ -26,6 +26,7 @@ func TestPairCommandPersistsSession(t *testing.T) {
 
 	tmpHome := t.TempDir()
 	t.Setenv("HEALTHBRIDGE_CONFIG_DIR", tmpHome)
+	t.Setenv("HEALTHBRIDGE_HOME", tmpHome)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -93,6 +94,16 @@ func TestPairCommandPersistsSession(t *testing.T) {
 	}
 	if !bytesEqual(rec.SessionKey, iosResult.SessionKey) {
 		t.Errorf("CLI saved a different session key than the iOS side derived")
+	}
+	cfg, err := loadDefaultConfig()
+	if err != nil {
+		t.Fatalf("load default config: %v", err)
+	}
+	if cfg.PairID != iosResult.PairID {
+		t.Errorf("default pair_id = %q, want %q", cfg.PairID, iosResult.PairID)
+	}
+	if cfg.RelayURL != srv.URL() {
+		t.Errorf("default relay_url = %q, want %q", cfg.RelayURL, srv.URL())
 	}
 
 	if !strings.Contains(stdout.String(), iosResult.SAS) {

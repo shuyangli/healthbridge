@@ -63,19 +63,22 @@ copy.
 
 The CLI needs two pieces of state to talk to your iPhone:
 
-1. **A relay URL.** Either pass `--relay <url>` on every command or
-   export it once:
-   ```sh
-   export HEALTHBRIDGE_RELAY=https://healthbridge.shuyang-li.workers.dev
-   ```
+1. **A relay URL.** Either pass `--relay <url>`, export
+   `HEALTHBRIDGE_RELAY`, or let `healthbridge pair` save it as the active
+   default in `~/.healthbridge/config`.
 2. **A pair ID.** Get one by running `healthbridge pair` once (this
    shows a QR for the iOS app to scan). After successful pairing, the
-   pair ID is printed to stdout and saved under
-   `~/.config/healthbridge/pairs/<pair_id>.json`. Export it so you
-   don't have to pass it every time:
-   ```sh
-   export HEALTHBRIDGE_PAIR=01J...
-   ```
+   full session is saved under `~/.config/healthbridge/pairs/<pair_id>.json`
+   and the active pair ID is saved under `~/.healthbridge/config`, so
+   follow-up commands can usually just call `healthbridge ...` directly.
+
+If you want to override the active default for a shell or script, env vars
+still win:
+
+```sh
+export HEALTHBRIDGE_RELAY=https://healthbridge.shuyang-li.workers.dev
+export HEALTHBRIDGE_PAIR=01J...
+```
 
 ## First-run sanity check
 

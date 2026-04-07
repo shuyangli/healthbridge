@@ -26,7 +26,7 @@ func commonFromCmd(c *cobra.Command) (commonFlags, error) {
 	wait, _ := c.Flags().GetDuration("wait")
 	asJSON, _ := c.Flags().GetBool("json")
 	if pair == "" {
-		return commonFlags{}, errors.New("--pair is required (set HEALTHBRIDGE_PAIR or pass --pair)")
+		return commonFlags{}, errors.New("--pair is required (run `healthbridge pair`, set HEALTHBRIDGE_PAIR, or save a default in ~/.healthbridge/config)")
 	}
 	return commonFlags{
 		RelayURL: relayURL,
@@ -46,9 +46,9 @@ func newRelayClient(f commonFlags) *relay.Client {
 
 // resolveWait returns the wait duration the CLI should pass to long-poll,
 // honouring three sources in priority order:
-//   1. --wait flag (if non-zero)
-//   2. interactive default (5s)
-//   3. non-TTY default (0s = fire-and-forget)
+//  1. --wait flag (if non-zero)
+//  2. interactive default (5s)
+//  3. non-TTY default (0s = fire-and-forget)
 func resolveWait(f commonFlags) time.Duration {
 	if f.Wait > 0 {
 		return f.Wait
