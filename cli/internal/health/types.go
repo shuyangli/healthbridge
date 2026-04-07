@@ -20,7 +20,16 @@ const (
 	BodyMassIndex         SampleType = "body_mass_index"
 	BloodGlucose          SampleType = "blood_glucose"
 	DietaryEnergyConsumed SampleType = "dietary_energy_consumed"
+	DietaryProtein        SampleType = "dietary_protein"
+	DietaryCarbohydrates  SampleType = "dietary_carbohydrates"
+	DietaryFatTotal       SampleType = "dietary_fat_total"
+	DietaryFiber          SampleType = "dietary_fiber"
+	DietarySugar          SampleType = "dietary_sugar"
 	DietaryWater          SampleType = "dietary_water"
+	DietaryCaffeine       SampleType = "dietary_caffeine"
+	DietarySodium         SampleType = "dietary_sodium"
+	DietaryCholesterol    SampleType = "dietary_cholesterol"
+	DietaryFatSaturated   SampleType = "dietary_fat_saturated"
 	SleepAnalysis         SampleType = "sleep_analysis"
 	Workout               SampleType = "workout"
 )
@@ -32,7 +41,11 @@ func AllSampleTypes() []SampleType {
 		StepCount, ActiveEnergyBurned, BasalEnergyBurned,
 		HeartRate, HeartRateResting,
 		BodyMass, BodyMassIndex, BloodGlucose,
-		DietaryEnergyConsumed, DietaryWater,
+		DietaryEnergyConsumed,
+		DietaryProtein, DietaryCarbohydrates, DietaryFatTotal,
+		DietaryFatSaturated, DietaryFiber, DietarySugar,
+		DietaryCholesterol, DietarySodium, DietaryCaffeine,
+		DietaryWater,
 		SleepAnalysis, Workout,
 	}
 }

@@ -40,6 +40,14 @@ func canonicalUnitForType(t health.SampleType) string {
 		return "count"
 	case health.BloodGlucose:
 		return "mg/dL"
+	case health.DietaryProtein, health.DietaryCarbohydrates,
+		health.DietaryFatTotal, health.DietaryFatSaturated,
+		health.DietaryFiber, health.DietarySugar:
+		return "g"
+	case health.DietaryCholesterol, health.DietarySodium:
+		return "mg"
+	case health.DietaryCaffeine:
+		return "mg"
 	case health.DietaryWater:
 		return "mL"
 	case health.SleepAnalysis:

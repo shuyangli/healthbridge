@@ -114,29 +114,27 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func requestAuthorization() async throws {
-        // M1 read scope only — step count.
-        guard let stepType = HKObjectType.quantityType(forIdentifier: .stepCount) else {
-            log.error("HKObjectType.quantityType(forIdentifier:.stepCount) returned nil")
-            throw NSError(
-                domain: "HealthBridge",
-                code: 10,
-                userInfo: [NSLocalizedDescriptionKey: "step_count type unavailable"]
-            )
+        let read = HealthKitMapping.readScopes()
+        let write = HealthKitMapping.writeScopes()
+        log.info("requesting auth: \(read.count, privacy: .public) read scopes, \(write.count, privacy: .public) write scopes")
+
+        // authorizationStatus is what HealthKit thinks the *write* status is
+        // for one type. It does NOT report read status (Apple does this on
+        // purpose to avoid leaking the existence of records). We log it for
+        // dietaryEnergyConsumed since that's the headline write type.
+        if let dec = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed) {
+            let pre = store.authorizationStatus(for: dec)
+            log.info("pre-call store.authorizationStatus(dietaryEnergyConsumed) = \(pre.rawValue, privacy: .public)")
         }
 
-        // authorizationStatus is what HealthKit thinks the *write* status is.
-        // It does NOT report read status (Apple does this on purpose to avoid
-        // leaking the existence of records). Still useful as a hint.
-        let preStatus = store.authorizationStatus(for: stepType)
-        log.info("pre-call store.authorizationStatus(for: stepCount) = \(preStatus.rawValue, privacy: .public) (\(String(describing: preStatus), privacy: .public))")
-
-        let read: Set<HKObjectType> = [stepType]
-        log.info("calling HKHealthStore.requestAuthorization(toShare:[], read:[stepCount]) — sheet should appear now")
-        try await store.requestAuthorization(toShare: [], read: read)
+        log.info("calling HKHealthStore.requestAuthorization — sheet should appear now")
+        try await store.requestAuthorization(toShare: write, read: read)
         log.info("HKHealthStore.requestAuthorization completed without throwing")
 
-        let postStatus = store.authorizationStatus(for: stepType)
-        log.info("post-call store.authorizationStatus(for: stepCount) = \(postStatus.rawValue, privacy: .public) (\(String(describing: postStatus), privacy: .public))")
+        if let dec = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed) {
+            let post = store.authorizationStatus(for: dec)
+            log.info("post-call store.authorizationStatus(dietaryEnergyConsumed) = \(post.rawValue, privacy: .public)")
+        }
     }
 
     // MARK: - Drain loop
@@ -202,37 +200,43 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func execute(job: Job) async throws -> JobResult {
+        log.info("execute job \(job.id, privacy: .public) kind=\(job.kind.rawValue, privacy: .public)")
         switch job.kind {
         case .read:
             let payload = try job.decodeReadPayload()
             let samples = try await self.runReadQuery(payload: payload)
             let rr = ReadResult(type: payload.type, samples: samples)
             return JobResult(jobID: job.id, status: .done, result: try .from(rr))
-        case .write, .sync:
+        case .write:
+            let payload = try job.decodeWritePayload()
+            let uuid = try await self.runWrite(payload: payload)
+            let wr = WriteResult(uuid: uuid)
+            return JobResult(jobID: job.id, status: .done, result: try .from(wr))
+        case .sync:
             return JobResult(
                 jobID: job.id,
                 status: .failed,
-                error: JobError(code: "not_implemented", message: "kind \(job.kind.rawValue) is M3+")
+                error: JobError(code: "not_implemented", message: "kind sync is M4+")
             )
         }
     }
 
+    // MARK: - Read
+
     private func runReadQuery(payload: ReadPayload) async throws -> [Sample] {
-        // M1: only step_count, only quantity samples summed by HealthKit's
-        // own statistics query. Real type-to-identifier mapping arrives in M3.
-        guard payload.type == .stepCount else {
+        guard let qType = HealthKitMapping.quantityType(for: payload.type) else {
             throw NSError(
                 domain: "HealthBridge",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "M1 only supports step_count"]
+                userInfo: [NSLocalizedDescriptionKey: "unsupported sample type \(payload.type.rawValue) — only quantity types are wired in"]
             )
         }
-        let stepType = HKObjectType.quantityType(forIdentifier: .stepCount)!
+        let unit = HealthKitMapping.unit(from: HealthKitMapping.canonicalUnit(for: payload.type))
         let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Sample], Error>) in
             let q = HKSampleQuery(
-                sampleType: stepType,
+                sampleType: qType,
                 predicate: predicate,
                 limit: payload.limit ?? HKObjectQueryNoLimit,
                 sortDescriptors: nil
@@ -245,9 +249,9 @@ final class AppCoordinator: ObservableObject {
                     guard let q = obj as? HKQuantitySample else { return nil }
                     return Sample(
                         uuid: q.uuid.uuidString,
-                        type: .stepCount,
-                        value: q.quantity.doubleValue(for: HKUnit.count()),
-                        unit: "count",
+                        type: payload.type,
+                        value: q.quantity.doubleValue(for: unit),
+                        unit: HealthKitMapping.canonicalUnit(for: payload.type),
                         start: q.startDate,
                         end: q.endDate,
                         source: Source(
@@ -260,6 +264,31 @@ final class AppCoordinator: ObservableObject {
             }
             store.execute(q)
         }
+    }
+
+    // MARK: - Write
+
+    private func runWrite(payload: WritePayload) async throws -> String {
+        let s = payload.sample
+        guard let qType = HealthKitMapping.quantityType(for: s.type) else {
+            throw NSError(
+                domain: "HealthBridge",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "unsupported write type \(s.type.rawValue)"]
+            )
+        }
+        let unit = HealthKitMapping.unit(from: s.unit)
+        let quantity = HKQuantity(unit: unit, doubleValue: s.value)
+        let hkSample = HKQuantitySample(
+            type: qType,
+            quantity: quantity,
+            start: s.start,
+            end: s.end
+        )
+        log.info("saving HKQuantitySample type=\(s.type.rawValue, privacy: .public) value=\(s.value, privacy: .public) unit=\(s.unit, privacy: .public)")
+        try await store.save(hkSample)
+        log.info("saved sample uuid=\(hkSample.uuid.uuidString, privacy: .public)")
+        return hkSample.uuid.uuidString
     }
 }
 
