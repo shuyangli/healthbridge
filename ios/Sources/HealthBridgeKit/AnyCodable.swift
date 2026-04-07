@@ -69,6 +69,12 @@ public struct AnyCodable: Codable, @unchecked Sendable {
             try container.encode(v)
         case let v as Double:
             try container.encode(v)
+        case let v as NSNumber:
+            if CFGetTypeID(v) == CFBooleanGetTypeID() {
+                try container.encode(v.boolValue)
+            } else {
+                try container.encode(v.doubleValue)
+            }
         case let v as String:
             try container.encode(v)
         case let v as [Any]:

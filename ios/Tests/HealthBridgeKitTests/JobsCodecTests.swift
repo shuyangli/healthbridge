@@ -85,6 +85,33 @@ final class JobsCodecTests: XCTestCase {
         XCTAssertEqual(rr.samples[0].value, 8421)
     }
 
+    func testJobResultRoundTripPreservesUnitValueOneAsNumber() throws {
+        let session = newSession()
+        let sample = Sample(
+            type: .stepCount,
+            value: 1,
+            unit: "count",
+            start: ISO8601DateFormatter().date(from: "2026-04-06T00:00:00Z")!,
+            end: ISO8601DateFormatter().date(from: "2026-04-06T00:01:00Z")!
+        )
+        let result = JobResult(
+            jobID: "one-step",
+            pageIndex: 0,
+            status: .done,
+            result: try AnyCodable.from(ReadResult(type: .stepCount, samples: [sample]))
+        )
+        let blob = try session.sealResult(jobID: "one-step", pageIndex: 0, result)
+        let decoded = try session.openResult(jobID: "one-step", pageIndex: 0, blob: blob)
+        let rr = try decoded.result!.decode(ReadResult.self)
+        XCTAssertEqual(rr.samples.count, 1)
+        XCTAssertEqual(rr.samples[0].value, 1)
+
+        let encoded = try JSONEncoder.iso8601.encode(decoded)
+        let str = String(decoding: encoded, as: UTF8.self)
+        XCTAssertTrue(str.contains("\"value\":1"), "expected numeric JSON value, got \(str)")
+        XCTAssertFalse(str.contains("\"value\":true"), "unexpected boolean JSON value in \(str)")
+    }
+
     func testOpenResultRejectsWrongPageIndex() throws {
         let session = newSession()
         let result = JobResult(jobID: "j", pageIndex: 0, status: .done)
