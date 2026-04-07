@@ -55,6 +55,9 @@ Implementation in progress. Milestones:
   - `healthbridge sync` with HKAnchoredObjectQuery semantics + multi-page reassembly
   - `healthbridge wipe` clears local state for a pair
   - Multi-page drainer in fakerelay; sync scenario tests cover adds, deletes, --full
-- [ ] M5 — Help, JSON, agent skill package
-- [ ] M6 — Local-direct fallback (no-cloud mode)
-- [ ] M7 — (Conditional) APNs silent push
+- [x] M5 — Help, JSON, agent skill package
+  - `healthbridge types` subcommand listing every supported sample type + canonical unit
+  - skill/healthbridge/SKILL.md as the agent manifest with command reference, example dialogues, error codes, and the critical pending-vs-done contract
+  - skill/healthbridge/examples/ and README.md with Claude Code install instructions
+- [ ] M6 — Local-direct fallback (no-cloud mode) — deferred
+- [ ] M7 — (Conditional) APNs silent push — deferred
