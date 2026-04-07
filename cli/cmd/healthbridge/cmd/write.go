@@ -107,10 +107,15 @@ func runWrite(c *cobra.Command, args []string) error {
 		return err
 	}
 	rc := newRelayClient(flags).WithAuthToken(authToken)
+	store, err := openJobStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
 	ctx, cancel := withCancellableContext()
 	defer cancel()
 
-	return executeWriteJob(ctx, c.OutOrStdout(), rc, session, job, resolveWait(flags), flags.JSON)
+	return executeWriteJob(ctx, c.OutOrStdout(), rc, session, store, job, resolveWait(flags), flags.JSON)
 }
 
 // parseMetaFlags converts repeated --meta key=value flags into a map.
@@ -136,6 +141,7 @@ func executeWriteJob(
 	out io.Writer,
 	rc *relay.Client,
 	session *jobs.Session,
+	store *jobs.Store,
 	job *health.Job,
 	wait time.Duration,
 	asJSON bool,
@@ -143,6 +149,9 @@ func executeWriteJob(
 	blob, err := session.SealJob(job)
 	if err != nil {
 		return fmt.Errorf("seal job: %w", err)
+	}
+	if err := mirrorEnqueue(store, job, session.PairID); err != nil {
+		return fmt.Errorf("mirror enqueue: %w", err)
 	}
 	if _, err := rc.EnqueueJob(ctx, job.ID, blob); err != nil {
 		return fmt.Errorf("enqueue: %w", err)
@@ -165,6 +174,7 @@ func executeWriteJob(
 	if err != nil {
 		return fmt.Errorf("open result: %w", err)
 	}
+	mirrorComplete(store, job.ID, result)
 	return emitWriteDone(out, job, result, asJSON)
 }
 

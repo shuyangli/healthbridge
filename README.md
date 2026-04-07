@@ -43,7 +43,11 @@ Implementation in progress. Milestones:
   - Per-pair Bearer auth_token enforced on every authenticated relay request
   - 50 relay vitest tests, 21 Swift XCTest tests, full Go test suite race-clean
 - [ ] M3 — Scopes + write path + audit log
-- [ ] M3 — Scopes + write path + audit log
+- [x] M3 — Scopes + write path + audit log
+  - `healthbridge write/scopes/status` subcommands with full test coverage
+  - PairRecord.Scopes + per-pair scope validation
+  - HealthBridgeKit AuditLog actor with FIFO cap + JSON persistence
+  - PRIVACY.md and in-app Disclosure strings pinned for 5.1.2(i) compliance
 - [ ] M4 — Job queue surface + sync + cache
 - [ ] M5 — Help, JSON, agent skill package
 - [ ] M6 — Local-direct fallback (no-cloud mode)

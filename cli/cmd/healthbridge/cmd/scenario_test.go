@@ -90,7 +90,7 @@ func TestReadScenarioRoundTrip(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	if err := executeReadJob(ctx, &out, cliClient, session, job, 2*time.Second, true /* json */); err != nil {
+	if err := executeReadJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, true /* json */); err != nil {
 		t.Fatalf("executeReadJob: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestReadScenarioPendingWhenDrainerOffline(t *testing.T) {
 
 	// --wait 0 makes this a fire-and-forget call. With no drainer running,
 	// the CLI should print a pending status and exit cleanly.
-	if err := executeReadJob(ctx, &out, cliClient, session, job, 0, true); err != nil {
+	if err := executeReadJob(ctx, &out, cliClient, session, nil, job, 0, true); err != nil {
 		t.Fatalf("executeReadJob: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestReadScenarioMismatchedSessionFails(t *testing.T) {
 	// agent sees when keys don't match.
 	job := jobs.NewReadJob(health.StepCount, time.Now().Add(-1*time.Hour), time.Now())
 	var out bytes.Buffer
-	if err := executeReadJob(ctx, &out, cliClient, wrong, job, 200*time.Millisecond, true); err != nil {
+	if err := executeReadJob(ctx, &out, cliClient, wrong, nil, job, 200*time.Millisecond, true); err != nil {
 		t.Fatalf("executeReadJob: %v", err)
 	}
 	if !strings.Contains(out.String(), "pending") {
@@ -276,7 +276,7 @@ func TestReadScenarioFailedResult(t *testing.T) {
 
 	job := jobs.NewReadJob(health.StepCount, time.Now().Add(-1*time.Hour), time.Now())
 	var out bytes.Buffer
-	err := executeReadJob(ctx, &out, cliClient, session, job, 2*time.Second, false)
+	err := executeReadJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, false)
 	if err == nil {
 		t.Fatal("expected an error from a failed result")
 	}

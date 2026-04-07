@@ -74,19 +74,30 @@ func runRead(c *cobra.Command, args []string) error {
 		return err
 	}
 	rc := newRelayClient(flags).WithAuthToken(authToken)
+	store, err := openJobStore()
+	if err != nil {
+		return err
+	}
+	defer store.Close()
 	ctx, cancel := withCancellableContext()
 	defer cancel()
 
-	return executeReadJob(ctx, c.OutOrStdout(), rc, session, job, resolveWait(flags), flags.JSON)
+	return executeReadJob(ctx, c.OutOrStdout(), rc, session, store, job, resolveWait(flags), flags.JSON)
 }
 
 // executeReadJob is the body of `read` extracted so scenario tests can drive
 // it directly with their own context, writer, relay client, and session.
+//
+// The local job mirror is updated alongside the relay enqueue/poll: this
+// is what `healthbridge jobs list/get/wait` reads. The mirror is optional
+// (a nil store is treated as a no-op) so unit tests that don't care about
+// persistence can pass nil.
 func executeReadJob(
 	ctx context.Context,
 	out io.Writer,
 	rc *relay.Client,
 	session *jobs.Session,
+	store *jobs.Store,
 	job *health.Job,
 	wait time.Duration,
 	asJSON bool,
@@ -94,6 +105,9 @@ func executeReadJob(
 	blob, err := session.SealJob(job)
 	if err != nil {
 		return fmt.Errorf("seal job: %w", err)
+	}
+	if err := mirrorEnqueue(store, job, session.PairID); err != nil {
+		return fmt.Errorf("mirror enqueue: %w", err)
 	}
 	if _, err := rc.EnqueueJob(ctx, job.ID, blob); err != nil {
 		return fmt.Errorf("enqueue: %w", err)
@@ -120,6 +134,7 @@ func executeReadJob(
 	if err != nil {
 		return fmt.Errorf("open result: %w", err)
 	}
+	mirrorComplete(store, job.ID, result)
 	return emitDone(out, job, result, asJSON)
 }
 

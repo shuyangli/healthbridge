@@ -75,7 +75,7 @@ func TestWriteScenarioRoundTrip(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := executeWriteJob(ctx, &out, cliClient, session, job, 2*time.Second, true); err != nil {
+	if err := executeWriteJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, true); err != nil {
 		t.Fatalf("executeWriteJob: %v", err)
 	}
 
@@ -178,7 +178,7 @@ func TestWriteScenarioFailedResult(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := executeWriteJob(ctx, &out, cliClient, session, job, 2*time.Second, false)
+	err := executeWriteJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, false)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
