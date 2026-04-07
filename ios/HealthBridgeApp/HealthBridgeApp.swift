@@ -1,15 +1,10 @@
 // HealthBridge — the iOS companion app.
 //
-// This file holds the SwiftUI app entry point and the foreground drain
-// loop that polls the relay for pending jobs and executes them against
-// HealthKit.
-//
-// This file imports HealthKit and SwiftUI, so it only builds inside an
-// Xcode project targeting iOS 17+. The testable, HealthKit-free portion
-// of the app lives in the HealthBridgeKit Swift package alongside this
-// directory; that package is what `swift test` exercises on the host.
-//
-// To set up the Xcode project: see HealthBridgeApp/README.md.
+// SwiftUI entry point + foreground drain loop. Imports HealthKit and
+// SwiftUI, so this file only builds inside the Xcode project produced
+// by `xcodegen generate` from ios/project.yml. The HealthKit-free heart
+// of the app lives in the HealthBridgeKit Swift package and is exercised
+// by `swift test` on macOS.
 
 #if os(iOS)
 import SwiftUI
@@ -20,18 +15,19 @@ import HealthBridgeKit
 @main
 struct HealthBridgeApp: App {
     @StateObject private var coordinator = AppCoordinator()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(coordinator)
-                .onAppear { coordinator.start() }
-                .onChange(of: ScenePhase.active) { _, phase in
-                    if phase == .active {
-                        coordinator.start()
-                    } else {
-                        coordinator.stop()
-                    }
+                // Reactivate the drain loop whenever the scene becomes
+                // foreground-active. We do NOT auto-request HealthKit
+                // permission here — that runs only on user button tap, so
+                // there's always an active host view to present the
+                // permission sheet from.
+                .onChange(of: scenePhase) { _, phase in
+                    coordinator.scenePhaseChanged(phase)
                 }
         }
     }
@@ -39,54 +35,120 @@ struct HealthBridgeApp: App {
 
 @MainActor
 final class AppCoordinator: ObservableObject {
-    @Published var status: String = "Idle"
+
+    enum AuthState: Equatable {
+        case unknown
+        case unavailable          // HKHealthStore.isHealthDataAvailable() == false
+        case requesting
+        case authorized
+        case denied(String)
+    }
+
+    @Published var status: String = "Tap “Connect to HealthKit” to begin."
     @Published var lastError: String?
     @Published var drainedCount: Int = 0
+    @Published var auth: AuthState = .unknown
 
     private var drainTask: Task<Void, Never>?
     private let store = HKHealthStore()
 
-    func start() {
-        guard drainTask == nil else { return }
-        status = "Requesting HealthKit access…"
-        drainTask = Task {
+    // MARK: - Lifecycle
+
+    func scenePhaseChanged(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            // If we're already authorised, restart the drain loop on
+            // foreground. Don't auto-request auth here — that's a button.
+            if case .authorized = auth {
+                startDrainLoopIfNeeded()
+            }
+        case .inactive, .background:
+            stopDrainLoop()
+        @unknown default:
+            break
+        }
+    }
+
+    // MARK: - Authorisation (called from a button tap)
+
+    func requestAuthorizationFromUser() {
+        guard auth != .requesting else { return }
+        guard HKHealthStore.isHealthDataAvailable() else {
+            auth = .unavailable
+            status = "HealthKit is not available on this device."
+            return
+        }
+        auth = .requesting
+        status = "Asking HealthKit for permission…"
+
+        Task { @MainActor in
             do {
                 try await self.requestAuthorization()
+                self.auth = .authorized
                 self.status = "Connected — draining relay"
-                try await self.drainLoop()
+                self.startDrainLoopIfNeeded()
             } catch {
+                self.auth = .denied("\(error)")
                 self.lastError = "\(error)"
-                self.status = "Stopped: \(error)"
+                self.status = "HealthKit permission failed: \(error.localizedDescription)"
             }
         }
     }
 
-    func stop() {
-        drainTask?.cancel()
-        drainTask = nil
-        status = "Backgrounded"
-    }
-
     private func requestAuthorization() async throws {
         // M1 read scope only — step count.
-        let read: Set<HKObjectType> = [
-            HKObjectType.quantityType(forIdentifier: .stepCount)!,
-        ]
+        guard let stepType = HKObjectType.quantityType(forIdentifier: .stepCount) else {
+            throw NSError(
+                domain: "HealthBridge",
+                code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "step_count type unavailable"]
+            )
+        }
+        let read: Set<HKObjectType> = [stepType]
         try await store.requestAuthorization(toShare: [], read: read)
+    }
+
+    // MARK: - Drain loop
+
+    func startDrainLoopIfNeeded() {
+        guard drainTask == nil else { return }
+        drainTask = Task { @MainActor in
+            do {
+                try await self.drainLoop()
+            } catch is CancellationError {
+                // expected on backgrounding
+            } catch {
+                self.lastError = "\(error)"
+                self.status = "Drain stopped: \(error.localizedDescription)"
+            }
+            self.drainTask = nil
+        }
+    }
+
+    private func stopDrainLoop() {
+        drainTask?.cancel()
+        drainTask = nil
+        if case .authorized = auth {
+            status = "Backgrounded — open the app to keep draining."
+        }
     }
 
     private func drainLoop() async throws {
         // M2: pair_id + session key still come from environment for now;
-        // the real pairing UI lands later in M2 and writes them to the
+        // the real pairing UI lands later in M3 and writes them to the
         // consent ledger.
         let env = ProcessInfo.processInfo.environment
         let pairID = env["HEALTHBRIDGE_PAIR"] ?? ""
         let relayURL = URL(string: env["HEALTHBRIDGE_RELAY"] ?? "http://127.0.0.1:8787")!
         guard !pairID.isEmpty else {
-            throw NSError(domain: "HealthBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "no pair_id configured"])
+            self.status = "Authorised. (No HEALTHBRIDGE_PAIR set in scheme — drain loop idle.)"
+            return
         }
-        guard let keyHex = env["HEALTHBRIDGE_KEY"], let keyBytes = Data(hexString: keyHex), keyBytes.count == 32 else {
-            throw NSError(domain: "HealthBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: "no valid 32-byte session key in HEALTHBRIDGE_KEY"])
+        guard let keyHex = env["HEALTHBRIDGE_KEY"],
+              let keyBytes = Data(hexString: keyHex),
+              keyBytes.count == 32 else {
+            self.status = "Authorised. (No valid HEALTHBRIDGE_KEY in scheme — drain loop idle.)"
+            return
         }
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: pairID)
         let authToken = env["HEALTHBRIDGE_AUTH_TOKEN"] ?? ""
@@ -128,7 +190,11 @@ final class AppCoordinator: ObservableObject {
         // M1: only step_count, only quantity samples summed by HealthKit's
         // own statistics query. Real type-to-identifier mapping arrives in M3.
         guard payload.type == .stepCount else {
-            throw NSError(domain: "HealthBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: "M1 only supports step_count"])
+            throw NSError(
+                domain: "HealthBridge",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "M1 only supports step_count"]
+            )
         }
         let stepType = HKObjectType.quantityType(forIdentifier: .stepCount)!
         let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
@@ -153,7 +219,10 @@ final class AppCoordinator: ObservableObject {
                         unit: "count",
                         start: q.startDate,
                         end: q.endDate,
-                        source: Source(name: q.sourceRevision.source.name, bundleID: q.sourceRevision.source.bundleIdentifier)
+                        source: Source(
+                            name: q.sourceRevision.source.name,
+                            bundleID: q.sourceRevision.source.bundleIdentifier
+                        )
                     )
                 }
                 cont.resume(returning: samples)
@@ -165,19 +234,52 @@ final class AppCoordinator: ObservableObject {
 
 struct ContentView: View {
     @EnvironmentObject var coordinator: AppCoordinator
+
     var body: some View {
         VStack(spacing: 20) {
             Text("HealthBridge").font(.largeTitle).bold()
-            Text(coordinator.status).foregroundStyle(.secondary)
-            Text("Drained \(coordinator.drainedCount) jobs")
-            if let err = coordinator.lastError {
-                Text(err).foregroundStyle(.red).font(.caption)
+            Text(coordinator.status)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+
+            switch coordinator.auth {
+            case .unknown, .denied:
+                Button(action: { coordinator.requestAuthorizationFromUser() }) {
+                    Text("Connect to HealthKit")
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+
+            case .requesting:
+                ProgressView()
+
+            case .unavailable:
+                Text("HealthKit is not available on this device.")
+                    .foregroundStyle(.red)
+
+            case .authorized:
+                Text("Drained \(coordinator.drainedCount) jobs")
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .imageScale(.large)
             }
+
+            if let err = coordinator.lastError {
+                Text(err)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+                    .padding(.horizontal)
+            }
+
             Spacer()
+
             Text("Keep this screen open for the agent to read your Health data.")
                 .multilineTextAlignment(.center)
                 .padding()
                 .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .padding()
     }
