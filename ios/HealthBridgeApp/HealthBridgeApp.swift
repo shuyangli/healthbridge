@@ -54,18 +54,26 @@ final class AppCoordinator: ObservableObject {
     @Published var lastError: String?
     @Published var drainedCount: Int = 0
     @Published var auth: AuthState = .unknown
+    /// The currently-paired Mac, if any. nil = no pair on disk yet,
+    /// in which case the UI shows the pairing flow.
+    @Published var pair: StoredPair?
 
     private var drainTask: Task<Void, Never>?
     private let store = HKHealthStore()
+
+    init() {
+        self.pair = PairStorage.load()
+    }
 
     // MARK: - Lifecycle
 
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
         case .active:
-            // If we're already authorised, restart the drain loop on
-            // foreground. Don't auto-request auth here — that's a button.
-            if case .authorized = auth {
+            // If we're already authorised AND paired, restart the drain
+            // loop on foreground. Don't auto-request auth — that's a
+            // button.
+            if case .authorized = auth, pair != nil {
                 startDrainLoopIfNeeded()
             }
         case .inactive, .background:
@@ -73,6 +81,26 @@ final class AppCoordinator: ObservableObject {
         @unknown default:
             break
         }
+    }
+
+    // MARK: - Pairing
+
+    func pairingCompleted(_ stored: StoredPair) {
+        log.info("pairingCompleted pair_id=\(stored.pairID, privacy: .public)")
+        self.pair = stored
+        // If HealthKit is already authorised, kick off the drain loop
+        // immediately. Otherwise the user still needs to tap "Connect
+        // to HealthKit" first.
+        if case .authorized = auth {
+            startDrainLoopIfNeeded()
+        }
+    }
+
+    func unpair() {
+        stopDrainLoop()
+        try? PairStorage.clear()
+        self.pair = nil
+        self.status = "Unpaired. Run `healthbridge pair` on your Mac to pair again."
     }
 
     // MARK: - Authorisation (called from a button tap)
@@ -101,9 +129,13 @@ final class AppCoordinator: ObservableObject {
             do {
                 try await self.requestAuthorization()
                 self.auth = .authorized
-                self.status = "Connected — draining relay"
+                self.status = self.pair == nil
+                    ? "Connected — pair with your Mac to start draining."
+                    : "Connected — draining relay"
                 log.info("requestAuthorization returned successfully; transitioning to .authorized")
-                self.startDrainLoopIfNeeded()
+                if self.pair != nil {
+                    self.startDrainLoopIfNeeded()
+                }
             } catch {
                 self.auth = .denied("\(error)")
                 self.lastError = "\(error)"
@@ -117,33 +149,22 @@ final class AppCoordinator: ObservableObject {
         let read = HealthKitMapping.readScopes()
         let write = HealthKitMapping.writeScopes()
         log.info("requesting auth: \(read.count, privacy: .public) read scopes, \(write.count, privacy: .public) write scopes")
-
-        // authorizationStatus is what HealthKit thinks the *write* status is
-        // for one type. It does NOT report read status (Apple does this on
-        // purpose to avoid leaking the existence of records). We log it for
-        // dietaryEnergyConsumed since that's the headline write type.
-        if let dec = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed) {
-            let pre = store.authorizationStatus(for: dec)
-            log.info("pre-call store.authorizationStatus(dietaryEnergyConsumed) = \(pre.rawValue, privacy: .public)")
-        }
-
         log.info("calling HKHealthStore.requestAuthorization — sheet should appear now")
         try await store.requestAuthorization(toShare: write, read: read)
         log.info("HKHealthStore.requestAuthorization completed without throwing")
-
-        if let dec = HKObjectType.quantityType(forIdentifier: .dietaryEnergyConsumed) {
-            let post = store.authorizationStatus(for: dec)
-            log.info("post-call store.authorizationStatus(dietaryEnergyConsumed) = \(post.rawValue, privacy: .public)")
-        }
     }
 
     // MARK: - Drain loop
 
     func startDrainLoopIfNeeded() {
         guard drainTask == nil else { return }
+        guard let pair = pair else {
+            log.info("startDrainLoopIfNeeded: no pair — skipping")
+            return
+        }
         drainTask = Task { @MainActor in
             do {
-                try await self.drainLoop()
+                try await self.drainLoop(pair: pair)
             } catch is CancellationError {
                 // expected on backgrounding
             } catch {
@@ -157,31 +178,22 @@ final class AppCoordinator: ObservableObject {
     private func stopDrainLoop() {
         drainTask?.cancel()
         drainTask = nil
-        if case .authorized = auth {
+        if case .authorized = auth, pair != nil {
             status = "Backgrounded — open the app to keep draining."
         }
     }
 
-    private func drainLoop() async throws {
-        // M2: pair_id + session key still come from environment for now;
-        // the real pairing UI lands later in M3 and writes them to the
-        // consent ledger.
-        let env = ProcessInfo.processInfo.environment
-        let pairID = env["HEALTHBRIDGE_PAIR"] ?? ""
-        let relayURL = URL(string: env["HEALTHBRIDGE_RELAY"] ?? "http://127.0.0.1:8787")!
-        guard !pairID.isEmpty else {
-            self.status = "Authorised. (No HEALTHBRIDGE_PAIR set in scheme — drain loop idle.)"
+    private func drainLoop(pair: StoredPair) async throws {
+        guard let relayURL = URL(string: pair.relayURL) else {
+            self.status = "Invalid relay URL in stored pair."
             return
         }
-        guard let keyHex = env["HEALTHBRIDGE_KEY"],
-              let keyBytes = Data(hexString: keyHex),
-              keyBytes.count == 32 else {
-            self.status = "Authorised. (No valid HEALTHBRIDGE_KEY in scheme — drain loop idle.)"
+        guard let keyBytes = Data(hexString: pair.sessionKeyHex), keyBytes.count == 32 else {
+            self.status = "Invalid session key in stored pair — re-pair from your Mac."
             return
         }
-        let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: pairID)
-        let authToken = env["HEALTHBRIDGE_AUTH_TOKEN"] ?? ""
-        let client = RelayClient(baseURL: relayURL, pairID: pairID, authToken: authToken)
+        let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: pair.pairID)
+        let client = RelayClient(baseURL: relayURL, pairID: pair.pairID, authToken: pair.authToken)
 
         var cursor: Int64 = 0
         while !Task.isCancelled {
@@ -320,10 +332,12 @@ struct ContentView: View {
                     .foregroundStyle(.red)
 
             case .authorized:
-                Text("Drained \(coordinator.drainedCount) jobs")
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .imageScale(.large)
+                if coordinator.pair == nil {
+                    PairingView(model: makePairingModel())
+                        .frame(maxHeight: .infinity)
+                } else {
+                    pairedSummary
+                }
             }
 
             if let err = coordinator.lastError {
@@ -342,6 +356,32 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
         }
         .padding()
+    }
+
+    private var pairedSummary: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .imageScale(.large)
+            Text("Drained \(coordinator.drainedCount) jobs")
+            if let pair = coordinator.pair {
+                Text("Paired with \(pair.pairID)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                Button("Unpair", role: .destructive) {
+                    coordinator.unpair()
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    private func makePairingModel() -> PairingFlowModel {
+        let m = PairingFlowModel()
+        m.onPaired = { stored in
+            coordinator.pairingCompleted(stored)
+        }
+        return m
     }
 }
 #endif

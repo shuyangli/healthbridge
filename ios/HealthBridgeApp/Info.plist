@@ -22,6 +22,8 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>HealthBridge uses the camera once during pairing, to scan the QR code your Mac CLI shows. The camera is not used at any other time.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>HealthBridge shares the Health data you select with the AI agent running on your paired Mac. Nothing is sent to a third-party server in plaintext — all data is end-to-end encrypted between this phone and your Mac via the relay.</string>
 	<key>NSHealthUpdateUsageDescription</key>
