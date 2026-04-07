@@ -31,11 +31,14 @@ agent links to them.
    ```
 2. The HealthBridge iOS app installed and paired with this Mac. Run
    `healthbridge pair` once and follow the QR-scan flow.
-3. The relay URL exported so the agent doesn't have to guess:
+3. The relay URL and pair ID exported so the agent doesn't have to guess:
    ```sh
-   export HEALTHBRIDGE_RELAY=https://healthbridge.shuyang-li.workers.dev
+   export HEALTHBRIDGE_RELAY=https://<your-relay>.workers.dev
    export HEALTHBRIDGE_PAIR=01J...   # ULID printed by `healthbridge status`
    ```
+   The relay URL is intentionally not hard-coded in this skill — set it
+   to whatever Cloudflare Worker endpoint you deployed (or that your
+   organisation operates).
 
 ## Install (Hermes)
 
