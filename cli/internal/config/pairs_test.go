@@ -12,6 +12,7 @@ func TestSaveAndLoadPair(t *testing.T) {
 	rec := &PairRecord{
 		PairID:     "01J9ZX0PAIR000000000000001",
 		RelayURL:   "https://relay.example.com",
+		AuthToken:  "abc123def456",
 		SessionKey: bytes.Repeat([]byte{0xab}, 32),
 		IOSPubHex:  "deadbeef",
 		CLIPubHex:  "cafebabe",
@@ -33,6 +34,9 @@ func TestSaveAndLoadPair(t *testing.T) {
 	}
 	if loaded.RelayURL != rec.RelayURL {
 		t.Errorf("RelayURL = %q, want %q", loaded.RelayURL, rec.RelayURL)
+	}
+	if loaded.AuthToken != rec.AuthToken {
+		t.Errorf("AuthToken = %q, want %q", loaded.AuthToken, rec.AuthToken)
 	}
 	if loaded.CreatedAt.IsZero() {
 		t.Error("CreatedAt should be set on save")

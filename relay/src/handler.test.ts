@@ -9,10 +9,24 @@ function fakeDeps(): MailboxDeps {
   };
 }
 
+/** newAuthedMailbox returns a Mailbox already past the pairing step — both
+ * pubkeys committed, an auth_token minted. The test helpers below default
+ * to using this so they don't have to thread auth through every call. */
 function newMailbox() {
+  const mb = new Mailbox(fakeDeps());
+  // Pre-pair so the auth check passes; tests that want a fresh, unpaired
+  // mailbox can use newUnpairedMailbox.
+  let counter = 0;
+  mb.postPubkey("ios", "ios-pub", () => `test-token-${++counter}`);
+  mb.postPubkey("cli", "cli-pub", () => `test-token-${++counter}`);
+  return mb;
+}
+
+function newUnpairedMailbox() {
   return new Mailbox(fakeDeps());
 }
 
+const TEST_TOKEN = "test-token-1";
 const URL_BASE = "https://relay.example.com";
 
 async function call(
@@ -20,12 +34,18 @@ async function call(
   path: string,
   body?: unknown,
   mailbox = newMailbox(),
+  token: string | null = TEST_TOKEN,
 ): Promise<{ status: number; body: any; mailbox: Mailbox }> {
   const init: RequestInit = { method };
+  const headers: Record<string, string> = {};
   if (body !== undefined) {
     init.body = JSON.stringify(body);
-    init.headers = { "content-type": "application/json" };
+    headers["content-type"] = "application/json";
   }
+  if (token) {
+    headers["authorization"] = `Bearer ${token}`;
+  }
+  init.headers = headers;
   const res = await handleRequest(new Request(`${URL_BASE}${path}`, init), mailbox, {
     longPollMs: 0,
   });
@@ -76,6 +96,7 @@ describe("POST /v1/jobs", () => {
     const req = new Request(`${URL_BASE}/v1/jobs`, {
       method: "POST",
       body: "{not json",
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
     });
     const res = await handleRequest(req, newMailbox(), { longPollMs: 0 });
     expect(res.status).toBe(400);
@@ -167,13 +188,13 @@ describe("GET /v1/results (long-poll)", () => {
 
 describe("POST /v1/pair", () => {
   it("commits ios pubkey first, then cli pubkey, returning auth_token", async () => {
-    const mb = newMailbox();
-    let res = await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-pub" }, mb);
+    const mb = newUnpairedMailbox();
+    let res = await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-pub" }, mb, null);
     expect(res.status).toBe(201);
     expect(res.body.ios_pub).toBe("ios-pub");
     expect(res.body.auth_token).toBeNull();
 
-    res = await call("POST", "/v1/pair", { side: "cli", pubkey: "cli-pub" }, mb);
+    res = await call("POST", "/v1/pair", { side: "cli", pubkey: "cli-pub" }, mb, null);
     expect(res.status).toBe(201);
     expect(res.body.cli_pub).toBe("cli-pub");
     expect(typeof res.body.auth_token).toBe("string");
@@ -181,15 +202,16 @@ describe("POST /v1/pair", () => {
   });
 
   it("rejects an invalid side", async () => {
-    const { status, body } = await call("POST", "/v1/pair", { side: "watch", pubkey: "p" });
+    const mb = newUnpairedMailbox();
+    const { status, body } = await call("POST", "/v1/pair", { side: "watch", pubkey: "p" }, mb, null);
     expect(status).toBe(400);
     expect(body.code).toBe("invalid_side");
   });
 
   it("rejects a different pubkey for an already-committed side", async () => {
-    const mb = newMailbox();
-    await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-1" }, mb);
-    const { status, body } = await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-2" }, mb);
+    const mb = newUnpairedMailbox();
+    await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-1" }, mb, null);
+    const { status, body } = await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-2" }, mb, null);
     expect(status).toBe(409);
     expect(body.code).toBe("pair_locked");
   });
@@ -197,13 +219,36 @@ describe("POST /v1/pair", () => {
 
 describe("GET /v1/pair", () => {
   it("returns the current state without long-poll", async () => {
-    const mb = newMailbox();
-    await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-pub" }, mb);
-    const { status, body } = await call("GET", "/v1/pair", undefined, mb);
+    const mb = newUnpairedMailbox();
+    await call("POST", "/v1/pair", { side: "ios", pubkey: "ios-pub" }, mb, null);
+    const { status, body } = await call("GET", "/v1/pair", undefined, mb, null);
     expect(status).toBe(200);
     expect(body.ios_pub).toBe("ios-pub");
     expect(body.cli_pub).toBeNull();
     expect(body.auth_token).toBeNull();
+  });
+});
+
+describe("auth", () => {
+  it("returns 401 with no Authorization header on a protected endpoint", async () => {
+    const mb = newMailbox();
+    const { status, body } = await call("POST", "/v1/jobs", { job_id: "j", blob: "b" }, mb, null);
+    expect(status).toBe(401);
+    expect(body.code).toBe("missing_auth");
+  });
+
+  it("returns 403 with a wrong token", async () => {
+    const mb = newMailbox();
+    const { status, body } = await call("POST", "/v1/jobs", { job_id: "j", blob: "b" }, mb, "wrong-token");
+    expect(status).toBe(403);
+    expect(body.code).toBe("bad_auth");
+  });
+
+  it("returns 401 if pairing has not completed", async () => {
+    const mb = newUnpairedMailbox();
+    const { status, body } = await call("POST", "/v1/jobs", { job_id: "j", blob: "b" }, mb, "any");
+    expect(status).toBe(401);
+    expect(body.code).toBe("pair_incomplete");
   });
 });
 

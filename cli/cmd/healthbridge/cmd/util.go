@@ -37,7 +37,9 @@ func commonFromCmd(c *cobra.Command) (commonFlags, error) {
 }
 
 // newRelayClient builds a relay.Client from the parsed flags. Stays here
-// so subcommands don't need to import the relay package directly.
+// so subcommands don't need to import the relay package directly. The
+// returned client is unauthenticated; use WithAuthToken to attach the
+// per-pair token after loading the session.
 func newRelayClient(f commonFlags) *relay.Client {
 	return relay.New(f.RelayURL, f.PairID)
 }

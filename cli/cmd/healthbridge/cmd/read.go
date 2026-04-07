@@ -69,11 +69,11 @@ func runRead(c *cobra.Command, args []string) error {
 		job.Payload = health.ReadPayload{Type: sampleType, From: from, To: to, Limit: limit}
 	}
 
-	session, err := loadSession(flags)
+	session, authToken, err := loadSession(flags)
 	if err != nil {
 		return err
 	}
-	rc := newRelayClient(flags)
+	rc := newRelayClient(flags).WithAuthToken(authToken)
 	ctx, cancel := withCancellableContext()
 	defer cancel()
 

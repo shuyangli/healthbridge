@@ -8,12 +8,21 @@ import Foundation
 public actor RelayClient {
     public let baseURL: URL
     public let pairID: String
+    /// Per-pair Bearer credential issued by the relay at pair completion.
+    /// Empty during the pairing flow itself; required for every other call.
+    public private(set) var authToken: String
+
     private let session: URLSession
 
-    public init(baseURL: URL, pairID: String, session: URLSession = .shared) {
+    public init(baseURL: URL, pairID: String, authToken: String = "", session: URLSession = .shared) {
         self.baseURL = baseURL
         self.pairID = pairID
+        self.authToken = authToken
         self.session = session
+    }
+
+    public func setAuthToken(_ token: String) {
+        self.authToken = token
     }
 
     public struct EnqueuedJob: Codable, Sendable {
@@ -188,6 +197,9 @@ public actor RelayClient {
             req.setValue("application/json", forHTTPHeaderField: "content-type")
         }
         req.setValue("application/json", forHTTPHeaderField: "accept")
+        if !authToken.isEmpty {
+            req.setValue("Bearer \(authToken)", forHTTPHeaderField: "authorization")
+        }
 
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else {

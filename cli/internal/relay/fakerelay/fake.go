@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"time"
 )
@@ -90,6 +91,27 @@ func (s *Server) PendingJobCount() int {
 	return len(s.jobs)
 }
 
+// PreparePair commits dummy pubkeys for both sides and mints an auth_token.
+// Tests that don't care about the pairing protocol itself call this so the
+// fakerelay's auth check passes for subsequent /v1/jobs and /v1/results
+// requests. Returns the token so the caller can attach it to its Client.
+func (s *Server) PreparePair() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iosPub == "" {
+		s.iosPub = "ios-test-pub"
+	}
+	if s.cliPub == "" {
+		s.cliPub = "cli-test-pub"
+	}
+	if s.authToken == "" {
+		s.tokenSeq++
+		s.authToken = fmt.Sprintf("test-token-%d", s.tokenSeq)
+		s.completedAt = time.Now().UnixMilli()
+	}
+	return s.authToken
+}
+
 // ---- HTTP routing -------------------------------------------------------
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -97,9 +119,23 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "missing_pair", "pair query parameter required")
 		return
 	}
+	// Public routes — no auth.
 	switch r.URL.Path + "|" + r.Method {
 	case "/v1/health|GET":
 		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	case "/v1/pair|POST":
+		s.postPair(w, r)
+		return
+	case "/v1/pair|GET":
+		s.pollPair(w, r)
+		return
+	}
+	// Authed routes.
+	if !s.authOK(w, r) {
+		return
+	}
+	switch r.URL.Path + "|" + r.Method {
 	case "/v1/jobs|POST":
 		s.enqueueJob(w, r)
 	case "/v1/jobs|GET":
@@ -108,15 +144,38 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.postResult(w, r)
 	case "/v1/results|GET":
 		s.pollResults(w, r)
-	case "/v1/pair|POST":
-		s.postPair(w, r)
-	case "/v1/pair|GET":
-		s.pollPair(w, r)
 	case "/v1/pair|DELETE":
 		s.revoke(w)
 	default:
 		writeErr(w, 404, "not_found", r.Method+" "+r.URL.Path)
 	}
+}
+
+// authOK validates the Authorization: Bearer header against the pair's
+// stored auth_token. Mirrors the TS handler's auth check.
+func (s *Server) authOK(w http.ResponseWriter, r *http.Request) bool {
+	s.mu.Lock()
+	expected := s.authToken
+	s.mu.Unlock()
+	if expected == "" {
+		writeErr(w, 401, "pair_incomplete", "no auth token yet")
+		return false
+	}
+	header := r.Header.Get("authorization")
+	if header == "" {
+		writeErr(w, 401, "missing_auth", "Authorization: Bearer required")
+		return false
+	}
+	const prefix = "Bearer "
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		writeErr(w, 401, "missing_auth", "Authorization must be a Bearer token")
+		return false
+	}
+	if header[len(prefix):] != expected {
+		writeErr(w, 403, "bad_auth", "auth token does not match this pair")
+		return false
+	}
+	return true
 }
 
 func (s *Server) enqueueJob(w http.ResponseWriter, r *http.Request) {

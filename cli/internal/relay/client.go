@@ -31,12 +31,17 @@ const DefaultLongPollMs = 25_000
 type Client struct {
 	BaseURL string
 	PairID  string
-	HTTP    *http.Client
+	// AuthToken is the per-pair Bearer credential the relay issued at
+	// pairing time. Empty during the pairing flow itself; required for
+	// every other endpoint after pairing has completed.
+	AuthToken string
+	HTTP      *http.Client
 }
 
 // New constructs a Client. baseURL must include the scheme but no trailing
 // slash, e.g. "https://healthbridge-relay.example.workers.dev". The CLI is
-// always pinned to one pair at a time.
+// always pinned to one pair at a time. Use WithAuthToken() to attach the
+// token after pairing.
 func New(baseURL, pairID string) *Client {
 	return &Client{
 		BaseURL: baseURL,
@@ -46,6 +51,15 @@ func New(baseURL, pairID string) *Client {
 			Timeout: 60 * time.Second,
 		},
 	}
+}
+
+// WithAuthToken returns a copy of this client with the bearer token set.
+// Use this immediately after persisting a pair record, so the rest of the
+// CLI's calls go through authenticated.
+func (c *Client) WithAuthToken(token string) *Client {
+	cp := *c
+	cp.AuthToken = token
+	return &cp
 }
 
 // Error is the structured error returned by the relay.
@@ -227,6 +241,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		req.Header.Set("content-type", "application/json")
 	}
 	req.Header.Set("accept", "application/json")
+	if c.AuthToken != "" {
+		req.Header.Set("authorization", "Bearer "+c.AuthToken)
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {

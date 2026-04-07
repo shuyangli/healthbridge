@@ -40,9 +40,30 @@ export async function handleRequest(
   const method = request.method.toUpperCase();
 
   try {
+    // Public endpoints — no auth.
     if (path === "/v1/health" && method === "GET") {
       return jsonResponse(200, { ok: true });
     }
+    if (path === "/v1/pair" && method === "POST") {
+      return await postPair(request, mailbox);
+    }
+    if (path === "/v1/pair" && method === "GET") {
+      return await getPair(url, mailbox, longPollMs);
+    }
+
+    // Everything else requires the per-pair Bearer token issued at pairing.
+    const token = bearerToken(request);
+    const expected = mailbox.getPair().authToken;
+    if (!expected) {
+      return errorResponse(401, "pair_incomplete", "this pair has no auth token yet — finish pairing first");
+    }
+    if (!token) {
+      return errorResponse(401, "missing_auth", "Authorization: Bearer <auth_token> required");
+    }
+    if (!constantTimeEquals(token, expected)) {
+      return errorResponse(403, "bad_auth", "auth token does not match this pair");
+    }
+
     if (path === "/v1/jobs" && method === "POST") {
       return await postJob(request, mailbox);
     }
@@ -54,12 +75,6 @@ export async function handleRequest(
     }
     if (path === "/v1/results" && method === "GET") {
       return await getResults(url, mailbox, longPollMs);
-    }
-    if (path === "/v1/pair" && method === "POST") {
-      return await postPair(request, mailbox);
-    }
-    if (path === "/v1/pair" && method === "GET") {
-      return await getPair(url, mailbox, longPollMs);
     }
     if (path === "/v1/pair" && method === "DELETE") {
       mailbox.revoke();
@@ -231,6 +246,24 @@ function parseIntParam(url: URL, name: string, fallback: number): number {
     throw new BadRequestError(`invalid_${name}`, `${name} must be a non-negative integer`);
   }
   return n;
+}
+
+function bearerToken(request: Request): string | null {
+  const header = request.headers.get("authorization") ?? request.headers.get("Authorization");
+  if (!header) return null;
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1]!.trim() : null;
+}
+
+/** constant-time string comparison; the runtime crypto.subtle helpers
+ * accept ArrayBuffers only, so we do a small hand-rolled compare. */
+function constantTimeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let acc = 0;
+  for (let i = 0; i < a.length; i++) {
+    acc |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return acc === 0;
 }
 
 function jsonResponse(status: number, body: unknown): Response {

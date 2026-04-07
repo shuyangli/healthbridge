@@ -88,7 +88,8 @@ final class AppCoordinator: ObservableObject {
             throw NSError(domain: "HealthBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: "no valid 32-byte session key in HEALTHBRIDGE_KEY"])
         }
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: pairID)
-        let client = RelayClient(baseURL: relayURL, pairID: pairID)
+        let authToken = env["HEALTHBRIDGE_AUTH_TOKEN"] ?? ""
+        let client = RelayClient(baseURL: relayURL, pairID: pairID, authToken: authToken)
 
         var cursor: Int64 = 0
         while !Task.isCancelled {

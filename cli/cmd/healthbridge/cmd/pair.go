@@ -73,6 +73,7 @@ func runPair(c *cobra.Command, _ []string) error {
 	rec := &config.PairRecord{
 		PairID:     result.PairID,
 		RelayURL:   result.RelayURL,
+		AuthToken:  result.AuthToken,
 		SessionKey: result.SessionKey,
 		IOSPubHex:  hex.EncodeToString(result.IOSPub),
 		CLIPubHex:  hex.EncodeToString(result.CLIPub),

@@ -19,6 +19,7 @@ import (
 type PairRecord struct {
 	PairID     string    `json:"pair_id"`
 	RelayURL   string    `json:"relay_url"`
+	AuthToken  string    `json:"auth_token"`
 	SessionKey []byte    `json:"-"`
 	SessionHex string    `json:"session_key_hex"`
 	IOSPubHex  string    `json:"ios_pub_hex"`

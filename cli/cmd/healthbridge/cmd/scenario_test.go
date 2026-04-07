@@ -42,8 +42,9 @@ func TestReadScenarioRoundTrip(t *testing.T) {
 
 	pairID := "01J9ZX0PAIR000000000000001"
 	session := newScenarioSession(pairID)
-	cliClient := relay.New(server.URL(), pairID)
-	drainerClient := relay.New(server.URL(), pairID)
+	token := server.PreparePair()
+	cliClient := relay.New(server.URL(), pairID).WithAuthToken(token)
+	drainerClient := relay.New(server.URL(), pairID).WithAuthToken(token)
 
 	var seenJob atomic.Pointer[health.Job]
 
@@ -147,7 +148,8 @@ func TestReadScenarioPendingWhenDrainerOffline(t *testing.T) {
 
 	pairID := "01J9ZX0PAIR000000000000002"
 	session := newScenarioSession(pairID)
-	cliClient := relay.New(server.URL(), pairID)
+	token := server.PreparePair()
+	cliClient := relay.New(server.URL(), pairID).WithAuthToken(token)
 
 	job := jobs.NewReadJob(
 		health.StepCount,
@@ -199,8 +201,9 @@ func TestReadScenarioMismatchedSessionFails(t *testing.T) {
 		Key:    bytes.Repeat([]byte{0x99}, crypto.SessionKeySize),
 		PairID: pairID,
 	}
-	cliClient := relay.New(server.URL(), pairID)
-	drainerClient := relay.New(server.URL(), pairID)
+	token := server.PreparePair()
+	cliClient := relay.New(server.URL(), pairID).WithAuthToken(token)
+	drainerClient := relay.New(server.URL(), pairID).WithAuthToken(token)
 
 	handler := func(_ context.Context, _ *health.Job) (*health.Result, error) {
 		return &health.Result{
@@ -252,8 +255,9 @@ func TestReadScenarioFailedResult(t *testing.T) {
 
 	pairID := "01J9ZX0PAIR000000000000003"
 	session := newScenarioSession(pairID)
-	cliClient := relay.New(server.URL(), pairID)
-	drainerClient := relay.New(server.URL(), pairID)
+	token := server.PreparePair()
+	cliClient := relay.New(server.URL(), pairID).WithAuthToken(token)
+	drainerClient := relay.New(server.URL(), pairID).WithAuthToken(token)
 
 	handler := func(_ context.Context, _ *health.Job) (*health.Result, error) {
 		return &health.Result{

@@ -11,23 +11,24 @@ import (
 	"github.com/shuyangli/healthbridge/cli/internal/jobs"
 )
 
-// loadSession assembles a jobs.Session for the current pair, looking in
-// (in priority order):
+// loadSession assembles a jobs.Session and the matching relay auth_token
+// for the current pair, looking in (priority order):
 //
-//   1. HEALTHBRIDGE_KEY env var (32-byte hex; useful for tests and CI)
+//   1. HEALTHBRIDGE_KEY + HEALTHBRIDGE_AUTH_TOKEN env vars (for tests/CI)
 //   2. ~/.config/healthbridge/pairs/<pair_id>.json written by `pair`
 //
 // Returns a clear error if no session is available.
-func loadSession(f commonFlags) (*jobs.Session, error) {
+func loadSession(f commonFlags) (*jobs.Session, string, error) {
 	if hexKey := os.Getenv("HEALTHBRIDGE_KEY"); hexKey != "" {
 		key, err := hex.DecodeString(hexKey)
 		if err != nil {
-			return nil, fmt.Errorf("HEALTHBRIDGE_KEY is not valid hex: %w", err)
+			return nil, "", fmt.Errorf("HEALTHBRIDGE_KEY is not valid hex: %w", err)
 		}
 		if len(key) != crypto.SessionKeySize {
-			return nil, fmt.Errorf("HEALTHBRIDGE_KEY must decode to %d bytes, got %d", crypto.SessionKeySize, len(key))
+			return nil, "", fmt.Errorf("HEALTHBRIDGE_KEY must decode to %d bytes, got %d", crypto.SessionKeySize, len(key))
 		}
-		return &jobs.Session{Key: key, PairID: f.PairID}, nil
+		token := os.Getenv("HEALTHBRIDGE_AUTH_TOKEN")
+		return &jobs.Session{Key: key, PairID: f.PairID}, token, nil
 	}
 
 	// Look for a stored pair record. config.LoadPair returns NotFound if
@@ -35,11 +36,11 @@ func loadSession(f commonFlags) (*jobs.Session, error) {
 	rec, err := config.LoadPair(configDir(), f.PairID)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no session for pair %s — run `healthbridge pair` first", f.PairID)
+			return nil, "", fmt.Errorf("no session for pair %s — run `healthbridge pair` first", f.PairID)
 		}
-		return nil, fmt.Errorf("load pair: %w", err)
+		return nil, "", fmt.Errorf("load pair: %w", err)
 	}
-	return &jobs.Session{Key: rec.SessionKey, PairID: rec.PairID}, nil
+	return &jobs.Session{Key: rec.SessionKey, PairID: rec.PairID}, rec.AuthToken, nil
 }
 
 // configDir returns the directory where pair records and config live.

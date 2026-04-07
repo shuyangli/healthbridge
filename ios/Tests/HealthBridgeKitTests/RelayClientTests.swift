@@ -105,6 +105,48 @@ final class RelayClientTests: XCTestCase {
         XCTAssertEqual(page.nextCursor, 1)
     }
 
+    func testAuthTokenIsAttachedAsBearerHeader() async throws {
+        var capturedAuth: String?
+        MockURLProtocol.handler = { req in
+            capturedAuth = req.value(forHTTPHeaderField: "authorization")
+            let payload: [String: Any] = ["job_id": "j", "seq": 1, "enqueued_at": 1, "expires_at": 2]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (HTTPURLResponse(url: req.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: cfg)
+        let client = RelayClient(
+            baseURL: URL(string: "https://relay.example.com")!,
+            pairID: "01J9ZX0PAIR000000000000001",
+            authToken: "deadbeef-token",
+            session: session
+        )
+        _ = try await client.enqueueJob(jobID: "j", blob: "b")
+        XCTAssertEqual(capturedAuth, "Bearer deadbeef-token")
+    }
+
+    func testNoAuthTokenOmitsHeader() async throws {
+        var capturedAuth: String?
+        MockURLProtocol.handler = { req in
+            capturedAuth = req.value(forHTTPHeaderField: "authorization")
+            let payload: [String: Any] = ["jobs": [], "next_cursor": 0]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: cfg)
+        // Pairing-time client has no token yet.
+        let client = RelayClient(
+            baseURL: URL(string: "https://relay.example.com")!,
+            pairID: "01J9ZX0PAIR000000000000001",
+            session: session
+        )
+        _ = try await client.pollJobs(since: 0, waitMs: 0)
+        XCTAssertNil(capturedAuth)
+    }
+
     func testRelayErrorIsThrown() async {
         MockURLProtocol.handler = { req in
             let payload: [String: Any] = ["code": "mailbox_full", "message": "x"]
