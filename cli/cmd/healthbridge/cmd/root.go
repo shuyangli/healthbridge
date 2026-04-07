@@ -31,6 +31,7 @@ func Root() *cobra.Command {
 	root.AddCommand(newJobsCmd())
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newWipeCmd())
+	root.AddCommand(newTypesCmd())
 	return root
 }
 

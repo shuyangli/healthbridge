@@ -48,7 +48,13 @@ Implementation in progress. Milestones:
   - PairRecord.Scopes + per-pair scope validation
   - HealthBridgeKit AuditLog actor with FIFO cap + JSON persistence
   - PRIVACY.md and in-app Disclosure strings pinned for 5.1.2(i) compliance
-- [ ] M4 — Job queue surface + sync + cache
+- [x] M4 — Job queue surface + sync + cache
+  - SQLite jobs mirror at $XDG_DATA_HOME/healthbridge/jobs.db with full lifecycle
+  - `healthbridge jobs list/get/wait/cancel/prune` against the mirror
+  - SQLite cache for samples + per-type anchors at cache.db
+  - `healthbridge sync` with HKAnchoredObjectQuery semantics + multi-page reassembly
+  - `healthbridge wipe` clears local state for a pair
+  - Multi-page drainer in fakerelay; sync scenario tests cover adds, deletes, --full
 - [ ] M5 — Help, JSON, agent skill package
 - [ ] M6 — Local-direct fallback (no-cloud mode)
 - [ ] M7 — (Conditional) APNs silent push
