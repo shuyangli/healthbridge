@@ -8,6 +8,9 @@ compatibility_date = "2025-01-01"
 name = "PAIR_DO"
 class_name = "PairMailboxDO"
 
+# Free-plan Durable Objects require SQLite-backed classes — `new_classes`
+# is rejected with error 10097 on the free tier. SQLite-backed DOs are
+# functionally identical for our use (per-pair mailbox state).
 [[migrations]]
 tag = "v1"
-new_classes = ["PairMailboxDO"]
+new_sqlite_classes = ["PairMailboxDO"]
