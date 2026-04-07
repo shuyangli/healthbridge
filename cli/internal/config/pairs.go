@@ -25,7 +25,26 @@ type PairRecord struct {
 	IOSPubHex  string    `json:"ios_pub_hex"`
 	CLIPubHex  string    `json:"cli_pub_hex"`
 	CLIPrivHex string    `json:"cli_priv_hex"`
-	CreatedAt  time.Time `json:"created_at"`
+	// Scopes is the set of HealthKit sample types this CLI is allowed to
+	// read AND write. Stored as the stable string forms (matching
+	// health.SampleType) so the file is hand-readable. The empty list
+	// means "all supported types" — the default after pairing.
+	Scopes    []string  `json:"scopes,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// HasScope reports whether the given sample type is included in this
+// pair's grant. An empty Scopes list grants everything.
+func (r *PairRecord) HasScope(sampleType string) bool {
+	if len(r.Scopes) == 0 {
+		return true
+	}
+	for _, s := range r.Scopes {
+		if s == sampleType {
+			return true
+		}
+	}
+	return false
 }
 
 func pairsDir(configDir string) string {

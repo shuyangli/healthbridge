@@ -24,7 +24,10 @@ func Root() *cobra.Command {
 	root.PersistentFlags().Bool("json", false, "Emit machine-readable JSON instead of human output")
 
 	root.AddCommand(newReadCmd())
+	root.AddCommand(newWriteCmd())
 	root.AddCommand(newPairCmd())
+	root.AddCommand(newScopesCmd())
+	root.AddCommand(newStatusCmd())
 	return root
 }
 

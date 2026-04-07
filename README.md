@@ -34,7 +34,15 @@ Implementation in progress. Milestones:
   - Go CLI with `read` subcommand, relay client, jobs codec, scenario tests
   - HealthBridgeKit Swift package with relay client + codecs + 9 XCTest tests
   - SwiftUI app skeleton (HealthBridgeApp/) with HealthKit drain loop
-- [ ] M2 — Encryption + real pairing
+- [x] M2 — Encryption + real pairing
+  - X25519 + HKDF + ChaCha20-Poly1305 in cli/internal/crypto + Swift CryptoKit mirror
+  - Cross-language fixture tests prove byte-identical interop (RFC 7748 vectors + custom)
+  - Session-based jobs codec with AAD binding (pair_id, job_id[, page_index])
+  - /v1/pair endpoint on the relay; X25519 exchange via PairAsCLI / PairAsIOS helpers
+  - `healthbridge pair` subcommand with QR-link parsing + 6-digit SAS confirmation
+  - Per-pair Bearer auth_token enforced on every authenticated relay request
+  - 50 relay vitest tests, 21 Swift XCTest tests, full Go test suite race-clean
+- [ ] M3 — Scopes + write path + audit log
 - [ ] M3 — Scopes + write path + audit log
 - [ ] M4 — Job queue surface + sync + cache
 - [ ] M5 — Help, JSON, agent skill package
