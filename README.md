@@ -30,6 +30,10 @@ skill/healthbridge/  Agent skill package wrapping the CLI
 Implementation in progress. Milestones:
 
 - [x] M1 — Relay skeleton + walking-skeleton read (plaintext)
+  - Cloudflare Worker relay with per-pair Durable Object mailbox + 36 vitest tests
+  - Go CLI with `read` subcommand, relay client, jobs codec, scenario tests
+  - HealthBridgeKit Swift package with relay client + codecs + 9 XCTest tests
+  - SwiftUI app skeleton (HealthBridgeApp/) with HealthKit drain loop
 - [ ] M2 — Encryption + real pairing
 - [ ] M3 — Scopes + write path + audit log
 - [ ] M4 — Job queue surface + sync + cache
