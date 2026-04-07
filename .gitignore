@@ -1,0 +1,27 @@
+# Go
+cli/healthbridge
+cli/healthbridge.exe
+*.test
+*.out
+cli/coverage.txt
+
+# Node / Cloudflare
+relay/node_modules/
+relay/.wrangler/
+relay/dist/
+relay/.dev.vars
+
+# Xcode
+ios/build/
+ios/DerivedData/
+ios/*.xcuserdata/
+ios/**/xcuserdata/
+ios/**/*.xcuserstate
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
