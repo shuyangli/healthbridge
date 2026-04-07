@@ -12,7 +12,7 @@ name: HealthBridge
 # CODE_SIGN_ENTITLEMENTS in the target's build settings.
 
 options:
-  bundleIdPrefix: dev.shuyangli.healthbridge
+  bundleIdPrefix: li.shuyang.healthbridge
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
@@ -46,7 +46,7 @@ targets:
           - "HealthBridge.entitlements"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.shuyangli.healthbridge
+        PRODUCT_BUNDLE_IDENTIFIER: li.shuyang.healthbridge
         INFOPLIST_FILE: HealthBridgeApp/Info.plist
         CODE_SIGN_ENTITLEMENTS: HealthBridgeApp/HealthBridge.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"

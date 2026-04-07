@@ -2,11 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.developer.healthkit</key>
-	<true/>
-	<key>com.apple.developer.healthkit.access</key>
-	<array>
-		<string>health-records</string>
-	</array>
+    <!-- Basic HealthKit. This grants access to the everyday quantity /
+         category / workout types we care about (steps, nutrition, body
+         mass, sleep, etc).
+
+         We deliberately do NOT include
+         `com.apple.developer.healthkit.access` here. That key is for
+         the Clinical Health Records capability, which Apple gates
+         behind a special review for paid developer accounts; declaring
+         it in the entitlements without the matching provisioning
+         profile entitlement causes iOS to silently reject the whole
+         HealthKit capability and `requestAuthorization` hangs without
+         showing the permission sheet. -->
+    <key>com.apple.developer.healthkit</key>
+    <true/>
 </dict>
 </plist>

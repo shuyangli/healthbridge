@@ -11,6 +11,12 @@ import SwiftUI
 import HealthKit
 import CryptoKit
 import HealthBridgeKit
+import OSLog
+
+/// All HealthKit + drain-loop diagnostics flow through this logger.
+/// View them in Console.app under subsystem `li.shuyang.healthbridge`,
+/// or in Xcode's debug console while the app is running.
+private let log = Logger(subsystem: "li.shuyang.healthbridge", category: "auth")
 
 @main
 struct HealthBridgeApp: App {
@@ -72,25 +78,37 @@ final class AppCoordinator: ObservableObject {
     // MARK: - Authorisation (called from a button tap)
 
     func requestAuthorizationFromUser() {
-        guard auth != .requesting else { return }
-        guard HKHealthStore.isHealthDataAvailable() else {
-            auth = .unavailable
-            status = "HealthKit is not available on this device."
+        log.info("requestAuthorizationFromUser tapped; current auth=\(String(describing: self.auth), privacy: .public)")
+        guard auth != .requesting else {
+            log.info("ignoring tap — already requesting")
             return
         }
+
+        let available = HKHealthStore.isHealthDataAvailable()
+        log.info("HKHealthStore.isHealthDataAvailable() = \(available, privacy: .public)")
+        guard available else {
+            auth = .unavailable
+            status = "HealthKit is not available on this device."
+            log.error("HealthKit reports unavailable — likely an iOS Simulator without HealthKit, or a non-iPhone device")
+            return
+        }
+
         auth = .requesting
         status = "Asking HealthKit for permission…"
+        log.info("transitioning to .requesting; will call HKHealthStore.requestAuthorization next")
 
         Task { @MainActor in
             do {
                 try await self.requestAuthorization()
                 self.auth = .authorized
                 self.status = "Connected — draining relay"
+                log.info("requestAuthorization returned successfully; transitioning to .authorized")
                 self.startDrainLoopIfNeeded()
             } catch {
                 self.auth = .denied("\(error)")
                 self.lastError = "\(error)"
                 self.status = "HealthKit permission failed: \(error.localizedDescription)"
+                log.error("requestAuthorization threw: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -98,14 +116,27 @@ final class AppCoordinator: ObservableObject {
     private func requestAuthorization() async throws {
         // M1 read scope only — step count.
         guard let stepType = HKObjectType.quantityType(forIdentifier: .stepCount) else {
+            log.error("HKObjectType.quantityType(forIdentifier:.stepCount) returned nil")
             throw NSError(
                 domain: "HealthBridge",
                 code: 10,
                 userInfo: [NSLocalizedDescriptionKey: "step_count type unavailable"]
             )
         }
+
+        // authorizationStatus is what HealthKit thinks the *write* status is.
+        // It does NOT report read status (Apple does this on purpose to avoid
+        // leaking the existence of records). Still useful as a hint.
+        let preStatus = store.authorizationStatus(for: stepType)
+        log.info("pre-call store.authorizationStatus(for: stepCount) = \(preStatus.rawValue, privacy: .public) (\(String(describing: preStatus), privacy: .public))")
+
         let read: Set<HKObjectType> = [stepType]
+        log.info("calling HKHealthStore.requestAuthorization(toShare:[], read:[stepCount]) — sheet should appear now")
         try await store.requestAuthorization(toShare: [], read: read)
+        log.info("HKHealthStore.requestAuthorization completed without throwing")
+
+        let postStatus = store.authorizationStatus(for: stepType)
+        log.info("post-call store.authorizationStatus(for: stepCount) = \(postStatus.rawValue, privacy: .public) (\(String(describing: postStatus), privacy: .public))")
     }
 
     // MARK: - Drain loop
