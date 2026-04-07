@@ -22,7 +22,10 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    DEVELOPMENT_TEAM: ""
+    # Personal Apple developer team. The ID isn't a secret — it's
+    # visible in any signed app bundle's entitlements — but if you fork
+    # this repo you'll want to swap in your own.
+    DEVELOPMENT_TEAM: RM2BB7S3BX
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
