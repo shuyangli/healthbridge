@@ -3,168 +3,88 @@ package pairing
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/shuyangli/healthbridge/cli/internal/crypto"
 	"github.com/shuyangli/healthbridge/cli/internal/relay"
 	"github.com/shuyangli/healthbridge/cli/internal/relay/fakerelay"
 )
 
-var errPairTimeout = errors.New("pair timeout")
-
-// runPairing runs both halves of the pairing protocol concurrently against
-// a single fakerelay and returns the two results. This is the core
-// scenario-test helper for the pairing flow.
-func runPairing(t *testing.T, pairID string) (*Result, *Result) {
+// runPairing drives both halves of the new (CLI-initiator) pairing
+// protocol against a fakerelay and returns the two results.
+func runPairing(t *testing.T, pairID string) (cli, ios *Result) {
 	t.Helper()
 	srv := fakerelay.New()
 	t.Cleanup(srv.Close)
 
-	iosClient := relay.New(srv.URL(), pairID)
 	cliClient := relay.New(srv.URL(), pairID)
-
-	var (
-		mu          sync.Mutex
-		iosResult   *Result
-		cliResult   *Result
-		iosErr      error
-		cliErr      error
-		iosLinkSent = make(chan *Result, 1)
-	)
+	iosClient := relay.New(srv.URL(), pairID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// iOS side: post pubkey first, then advertise the link to the CLI side
-	// (in production this happens via a QR code; in the test it happens via
-	// a channel), then long-poll for completion.
-	go func() {
-		// Phase 1: post the ios pubkey so the relay knows it.
-		// We can't use PairAsIOS here because that helper does post + poll
-		// in one call; we need to publish the link mid-flight. Inline the
-		// two steps.
-		keys, err := crypto.GenerateKeyPair()
-		if err != nil {
-			mu.Lock()
-			iosErr = err
-			mu.Unlock()
-			close(iosLinkSent)
-			return
-		}
-		_, err = iosClient.PostPubkey(ctx, "ios", hex.EncodeToString(keys.Public))
-		if err != nil {
-			mu.Lock()
-			iosErr = err
-			mu.Unlock()
-			close(iosLinkSent)
-			return
-		}
-		iosLinkSent <- &Result{
-			PairID: pairID,
-			IOSPub: keys.Public,
-		}
+	// CLI side: post pubkey first, generate the link, then long-poll
+	// for the iOS side via CompletePairing.
+	partial, link, err := InitiatePairing(ctx, cliClient, srv.URL())
+	if err != nil {
+		t.Fatalf("InitiatePairing: %v", err)
+	}
 
-		// Phase 2: long-poll for completion and derive the session key.
-		state, err := iosClient.PollPair(ctx, 5000)
-		if err != nil {
-			mu.Lock()
-			iosErr = err
-			mu.Unlock()
-			return
-		}
-		if state.CLIPub == nil || state.AuthToken == nil {
-			mu.Lock()
-			iosErr = errPairTimeout
-			mu.Unlock()
-			return
-		}
-		cliPub, _ := hex.DecodeString(*state.CLIPub)
-		shared, err := crypto.SharedSecret(keys.Private, cliPub)
-		if err != nil {
-			mu.Lock()
-			iosErr = err
-			mu.Unlock()
-			return
-		}
-		transcript := crypto.BuildTranscript(pairID, keys.Public, cliPub)
-		session, _ := crypto.DeriveSessionKey(shared, transcript, "healthbridge/m2/session")
+	var (
+		mu        sync.Mutex
+		iosResult *Result
+		iosErr    error
+	)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		r, err := RespondPairing(ctx, iosClient, link)
 		mu.Lock()
-		iosResult = &Result{
-			PairID:     pairID,
-			SessionKey: session,
-			AuthToken:  *state.AuthToken,
-			IOSPub:     keys.Public,
-			CLIPub:     cliPub,
-			SAS:        crypto.SAS(shared, transcript),
-		}
+		iosResult, iosErr = r, err
 		mu.Unlock()
 	}()
 
-	// CLI side: wait for the iOS link, then run the CLI half.
-	link := <-iosLinkSent
-	if iosErr != nil {
-		t.Fatalf("ios setup: %v", iosErr)
-	}
-	pairLink := &PairLink{
-		PairID:   pairID,
-		IOSPub:   hex.EncodeToString(link.IOSPub),
-		RelayURL: srv.URL(),
-		Version:  protocolVersion,
-	}
-	r, err := PairAsCLI(ctx, cliClient, pairLink)
+	// CLI side: complete now that iOS has been kicked off.
+	cliResult, err := CompletePairing(ctx, cliClient, partial, 5000)
 	if err != nil {
-		t.Fatalf("PairAsCLI: %v", err)
+		t.Fatalf("CompletePairing: %v", err)
 	}
-	cliResult = r
-	cliErr = nil
 
-	// Wait for the iOS goroutine to finish so we can compare.
-	deadline := time.After(2 * time.Second)
-	for {
-		mu.Lock()
-		if iosResult != nil || iosErr != nil {
-			mu.Unlock()
-			break
-		}
-		mu.Unlock()
-		select {
-		case <-deadline:
-			t.Fatal("ios half never finished")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
 	if iosErr != nil {
-		t.Fatalf("ios half: %v", iosErr)
+		t.Fatalf("RespondPairing: %v", iosErr)
 	}
-	_ = cliErr
-	return iosResult, cliResult
+	return cliResult, iosResult
 }
 
 func TestPairingProducesSameSessionAndSAS(t *testing.T) {
-	ios, cli := runPairing(t, "01J9ZX0PAIR000000000000001")
+	cli, ios := runPairing(t, "01J9ZX0PAIR000000000000001")
 
-	if !bytes.Equal(ios.SessionKey, cli.SessionKey) {
-		t.Errorf("session keys diverged:\n ios %x\n cli %x", ios.SessionKey, cli.SessionKey)
+	if !bytes.Equal(cli.SessionKey, ios.SessionKey) {
+		t.Errorf("session keys diverged:\n cli %x\n ios %x", cli.SessionKey, ios.SessionKey)
 	}
-	if ios.SAS != cli.SAS {
-		t.Errorf("SAS diverged: ios=%q cli=%q", ios.SAS, cli.SAS)
+	if cli.SAS != ios.SAS {
+		t.Errorf("SAS diverged: cli=%q ios=%q", cli.SAS, ios.SAS)
 	}
-	if ios.AuthToken != cli.AuthToken {
-		t.Errorf("auth_token diverged: ios=%q cli=%q", ios.AuthToken, cli.AuthToken)
+	if cli.AuthToken != ios.AuthToken {
+		t.Errorf("auth_token diverged: cli=%q ios=%q", cli.AuthToken, ios.AuthToken)
 	}
-	if ios.PairID != cli.PairID {
-		t.Errorf("pair_id diverged: ios=%q cli=%q", ios.PairID, cli.PairID)
+	if cli.PairID != ios.PairID {
+		t.Errorf("pair_id diverged: cli=%q ios=%q", cli.PairID, ios.PairID)
+	}
+	if !bytes.Equal(cli.IOSPub, ios.IOSPub) || !bytes.Equal(cli.CLIPub, ios.CLIPub) {
+		t.Errorf("pubkeys diverged")
 	}
 }
 
 func TestEncodeDecodeLinkRoundTrip(t *testing.T) {
 	link := &PairLink{
 		PairID:   "01J9ZX0PAIR000000000000001",
-		IOSPub:   "deadbeef",
+		CLIPub:   "deadbeef",
 		RelayURL: "https://example.com",
 	}
 	s, err := EncodeLink(link)
@@ -175,7 +95,7 @@ func TestEncodeDecodeLinkRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PairID != link.PairID || got.IOSPub != link.IOSPub || got.RelayURL != link.RelayURL {
+	if got.PairID != link.PairID || got.CLIPub != link.CLIPub || got.RelayURL != link.RelayURL {
 		t.Errorf("round-trip mismatch: %+v vs %+v", got, link)
 	}
 	if got.Version != protocolVersion {
@@ -184,17 +104,27 @@ func TestEncodeDecodeLinkRoundTrip(t *testing.T) {
 }
 
 func TestDecodeLinkRejectsBadVersion(t *testing.T) {
-	bad := `{"v":"v999","pair_id":"x","ios_pub_hex":"deadbeef","relay_url":"https://example.com"}`
+	bad := `{"v":"v999","pair_id":"x","cli_pub_hex":"deadbeef","relay_url":"https://example.com"}`
 	if _, err := DecodeLink(bad); err == nil {
 		t.Error("expected version mismatch error")
 	}
 }
 
+// The previous v1 link shape used `ios_pub_hex`. After bumping to v2 the
+// CLI must refuse to decode old links rather than silently producing the
+// wrong session key.
+func TestDecodeLinkRejectsV1Shape(t *testing.T) {
+	v1 := `{"v":"healthbridge-pair-v1","pair_id":"x","ios_pub_hex":"deadbeef","relay_url":"https://example.com"}`
+	if _, err := DecodeLink(v1); err == nil {
+		t.Error("expected v1 link to be rejected by v2 decoder")
+	}
+}
+
 func TestDecodeLinkRejectsMissingFields(t *testing.T) {
 	for _, bad := range []string{
-		`{"v":"healthbridge-pair-v1"}`,
-		`{"v":"healthbridge-pair-v1","pair_id":"x"}`,
-		`{"v":"healthbridge-pair-v1","pair_id":"x","ios_pub_hex":"deadbeef"}`,
+		`{"v":"healthbridge-pair-v2"}`,
+		`{"v":"healthbridge-pair-v2","pair_id":"x"}`,
+		`{"v":"healthbridge-pair-v2","pair_id":"x","cli_pub_hex":"deadbeef"}`,
 	} {
 		if _, err := DecodeLink(bad); err == nil {
 			t.Errorf("expected error for %q", bad)

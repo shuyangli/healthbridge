@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"strings"
+	"time"
 
+	"github.com/mdp/qrterminal/v3"
+	"github.com/oklog/ulid/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/shuyangli/healthbridge/cli/internal/config"
@@ -14,47 +17,86 @@ import (
 	"github.com/shuyangli/healthbridge/cli/internal/relay"
 )
 
+// pairLinkEmittedHook is called from runPair as soon as the QR has been
+// rendered. Tests substitute it with a channel send so they can drive
+// the iOS responder side from the same process. Production callers leave
+// it nil.
+var pairLinkEmittedHook func(*pairing.PairLink)
+
+// defaultPairWait is how long the CLI long-polls for the iOS responder
+// after rendering the QR. Generous because the user has to physically
+// open the app and aim a camera.
+const defaultPairWait = 2 * time.Minute
+
 func newPairCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "pair",
-		Short: "Pair this CLI with a HealthBridge iOS app",
-		Long: `Reads a pair link (JSON produced by the iOS app and shown as a QR code),
-runs the X25519 key exchange against the relay, displays a 6-digit SAS
-that the user must confirm matches what the iOS app shows, and (on
-success) saves the resulting session key + auth token to the local
-config under ~/.config/healthbridge/pairs/.
+		Short: "Pair this CLI with a HealthBridge iPhone",
+		Long: `Mints a pair_id, runs the X25519 key exchange against the relay, and
+shows a QR code in the terminal. Open HealthBridge on your iPhone, tap
+"Pair", and scan the QR. Both the CLI and the iPhone will then show a
+six-digit SAS — confirm they match on both sides before approving.
 
-The link is read from --link, or from stdin, or from a path with --link-file.
+The session key + auth token are saved to ~/.config/healthbridge/pairs/
+on success.
 
 Examples:
-  healthbridge pair --link '{"v":"healthbridge-pair-v1",...}'
-  echo '<link json>' | healthbridge pair
-  healthbridge pair --link-file ./link.json
+  healthbridge pair
+  healthbridge pair --relay https://healthbridge.example.workers.dev
+  healthbridge pair --wait 5m
 `,
 		RunE: runPair,
 	}
-	c.Flags().String("link", "", "Pair link JSON (from the iOS app QR code)")
-	c.Flags().String("link-file", "", "Read the pair link JSON from this file")
 	c.Flags().Bool("yes", false, "Skip the SAS confirmation prompt (testing only)")
 	return c
 }
 
 func runPair(c *cobra.Command, _ []string) error {
-	link, err := readPairLink(c)
-	if err != nil {
-		return err
+	relayURL, _ := c.Flags().GetString("relay")
+	if relayURL == "" {
+		return fmt.Errorf("--relay is required (or set HEALTHBRIDGE_RELAY)")
 	}
-	rc := relay.New(link.RelayURL, link.PairID)
+	wait, _ := c.Flags().GetDuration("wait")
+	if wait <= 0 {
+		wait = defaultPairWait
+	}
 
-	ctx, cancel := withCancellableContext()
-	defer cancel()
-
-	result, err := pairing.PairAsCLI(ctx, rc, link)
+	pairID, err := newPairID()
 	if err != nil {
 		return fmt.Errorf("pair: %w", err)
 	}
 
+	rc := relay.New(relayURL, pairID)
+	ctx, cancel := withCancellableContext()
+	defer cancel()
+
 	out := c.OutOrStdout()
+	fmt.Fprintf(out, "Pair ID: %s\nRelay  : %s\n\n", pairID, relayURL)
+
+	partial, link, err := pairing.InitiatePairing(ctx, rc, relayURL)
+	if err != nil {
+		return fmt.Errorf("pair: %w", err)
+	}
+
+	linkJSON, err := pairing.EncodeLink(link)
+	if err != nil {
+		return fmt.Errorf("pair: encode link: %w", err)
+	}
+
+	if err := renderQR(out, linkJSON); err != nil {
+		return fmt.Errorf("pair: render QR: %w", err)
+	}
+	fmt.Fprintf(out, "\nOpen HealthBridge on your iPhone → Pair → Scan, and point the camera at this QR.\nWaiting up to %s for the phone…\n\n", wait.Round(time.Second))
+
+	if pairLinkEmittedHook != nil {
+		pairLinkEmittedHook(link)
+	}
+
+	result, err := pairing.CompletePairing(ctx, rc, partial, int(wait/time.Millisecond))
+	if err != nil {
+		return fmt.Errorf("pair: %w", err)
+	}
+
 	if err := emitPairSAS(out, result); err != nil {
 		return err
 	}
@@ -86,27 +128,31 @@ func runPair(c *cobra.Command, _ []string) error {
 	return nil
 }
 
-func readPairLink(c *cobra.Command) (*pairing.PairLink, error) {
-	if path, _ := c.Flags().GetString("link-file"); path != "" {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read link file: %w", err)
-		}
-		return pairing.DecodeLink(strings.TrimSpace(string(raw)))
-	}
-	if literal, _ := c.Flags().GetString("link"); literal != "" {
-		return pairing.DecodeLink(strings.TrimSpace(literal))
-	}
-	// Fall back to stdin.
-	raw, err := io.ReadAll(c.InOrStdin())
+// newPairID returns a fresh ULID for a pairing session.
+func newPairID() (string, error) {
+	id, err := ulid.New(ulid.Timestamp(time.Now()), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("read link from stdin: %w", err)
+		return "", err
 	}
-	s := strings.TrimSpace(string(raw))
-	if s == "" {
-		return nil, fmt.Errorf("no pair link provided (--link, --link-file, or stdin required)")
+	return id.String(), nil
+}
+
+// renderQR draws the QR code to out using a low-error-correction level
+// (which keeps the QR small enough to fit in a typical terminal) and a
+// quiet zone of 1 cell on each side.
+func renderQR(out io.Writer, payload string) error {
+	cfg := qrterminal.Config{
+		Level:      qrterminal.L,
+		Writer:     out,
+		HalfBlocks: true,
+		BlackChar:  qrterminal.BLACK_BLACK,
+		WhiteChar:  qrterminal.WHITE_WHITE,
+		BlackWhiteChar: qrterminal.BLACK_WHITE,
+		WhiteBlackChar: qrterminal.WHITE_BLACK,
+		QuietZone:  1,
 	}
-	return pairing.DecodeLink(s)
+	qrterminal.GenerateWithConfig(payload, cfg)
+	return nil
 }
 
 func emitPairSAS(out io.Writer, r *pairing.Result) error {
