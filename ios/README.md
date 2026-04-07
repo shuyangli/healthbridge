@@ -5,9 +5,10 @@ The iOS companion app and its testable Swift Package.
 ```
 ios/
   Package.swift                   SwiftPM package — testable on macOS
+  project.yml                     XcodeGen source for HealthBridge.xcodeproj
   Sources/HealthBridgeKit/        Pure Swift kit (relay client, codecs, types)
   Tests/HealthBridgeKitTests/     Kit unit tests
-  HealthBridgeApp/                SwiftUI app sources (need Xcode project)
+  HealthBridgeApp/                SwiftUI app sources (Info.plist, entitlements)
 ```
 
 `HealthBridgeKit` is a Swift package that builds and tests on macOS without
@@ -30,8 +31,25 @@ cd ios
 swift test
 ```
 
+## Build the iOS app
+
+```sh
+cd ios
+brew install xcodegen     # one-time
+xcodegen generate         # writes HealthBridge.xcodeproj from project.yml
+xcodebuild -project HealthBridge.xcodeproj \
+           -scheme HealthBridge \
+           -sdk iphonesimulator \
+           -destination 'generic/platform=iOS Simulator' build
+```
+
+The project file itself is gitignored — `project.yml` is the source of
+truth, so PRs that touch the iOS structure stay reviewable as text.
+
 ## Run the app on a phone
 
-Open the Xcode project, set the scheme's environment variables to point at
-your local relay (`wrangler dev` in `relay/`), and Run on a real device.
-The simulator does not have HealthKit data.
+Open `HealthBridge.xcodeproj` (after generating it) in Xcode, set the
+development team in Signing & Capabilities, and edit the scheme's
+environment variables to point at your local relay (`wrangler dev` in
+`relay/`). The simulator does not have HealthKit data, so a real
+device is needed for end-to-end testing.

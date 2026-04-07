@@ -17,6 +17,8 @@ ios/DerivedData/
 ios/.build/
 ios/.swiftpm/
 ios/Package.resolved
+# HealthBridge.xcodeproj is generated from project.yml by xcodegen.
+ios/HealthBridge.xcodeproj/
 ios/*.xcuserdata/
 ios/**/xcuserdata/
 ios/**/*.xcuserstate

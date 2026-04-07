@@ -14,6 +14,7 @@
 #if os(iOS)
 import SwiftUI
 import HealthKit
+import CryptoKit
 import HealthBridgeKit
 
 @main
