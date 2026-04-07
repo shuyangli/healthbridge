@@ -61,6 +61,22 @@ public struct AnyCodable: Codable, @unchecked Sendable {
         switch value {
         case is NSNull:
             try container.encodeNil()
+        // NSNumber must be matched BEFORE Bool/Int/Double. On Apple
+        // platforms Swift's Foundation bridges NSNumber to all three:
+        // `NSNumber(value: 1) as? Bool` returns `true`, which would
+        // otherwise cause JSONSerialization-produced numeric values
+        // (e.g. an integer-valued Double round-tripped via
+        // `AnyCodable.from`) to be re-encoded as JSON booleans. Use
+        // CFBoolean / CFNumberIsFloatType to recover the original
+        // JSON shape.
+        case let v as NSNumber:
+            if CFGetTypeID(v) == CFBooleanGetTypeID() {
+                try container.encode(v.boolValue)
+            } else if CFNumberIsFloatType(v) {
+                try container.encode(v.doubleValue)
+            } else {
+                try container.encode(v.int64Value)
+            }
         case let v as Bool:
             try container.encode(v)
         case let v as Int:
@@ -69,12 +85,6 @@ public struct AnyCodable: Codable, @unchecked Sendable {
             try container.encode(v)
         case let v as Double:
             try container.encode(v)
-        case let v as NSNumber:
-            if CFGetTypeID(v) == CFBooleanGetTypeID() {
-                try container.encode(v.boolValue)
-            } else {
-                try container.encode(v.doubleValue)
-            }
         case let v as String:
             try container.encode(v)
         case let v as [Any]:
