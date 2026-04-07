@@ -10,11 +10,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shuyangli/healthbridge/cli/internal/crypto"
 	"github.com/shuyangli/healthbridge/cli/internal/health"
 	"github.com/shuyangli/healthbridge/cli/internal/jobs"
 	"github.com/shuyangli/healthbridge/cli/internal/relay"
 	"github.com/shuyangli/healthbridge/cli/internal/relay/fakerelay"
 )
+
+// newScenarioSession returns a Session with a deterministic 32-byte key
+// shared between the CLI side and the drainer side. Tests don't exercise
+// the X25519 exchange — internal/crypto has its own coverage for that.
+func newScenarioSession(pairID string) *jobs.Session {
+	key := bytes.Repeat([]byte{0x42}, crypto.SessionKeySize)
+	return &jobs.Session{Key: key, PairID: pairID}
+}
 
 // TestReadScenarioRoundTrip drives the full M1 path:
 //
@@ -32,6 +41,7 @@ func TestReadScenarioRoundTrip(t *testing.T) {
 	defer server.Close()
 
 	pairID := "01J9ZX0PAIR000000000000001"
+	session := newScenarioSession(pairID)
 	cliClient := relay.New(server.URL(), pairID)
 	drainerClient := relay.New(server.URL(), pairID)
 
@@ -63,7 +73,7 @@ func TestReadScenarioRoundTrip(t *testing.T) {
 		}, nil
 	}
 
-	drainer := fakerelay.NewDrainer(drainerClient, handler)
+	drainer := fakerelay.NewDrainer(drainerClient, session, handler)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -79,7 +89,7 @@ func TestReadScenarioRoundTrip(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	if err := executeReadJob(ctx, &out, cliClient, job, 2*time.Second, true /* json */); err != nil {
+	if err := executeReadJob(ctx, &out, cliClient, session, job, 2*time.Second, true /* json */); err != nil {
 		t.Fatalf("executeReadJob: %v", err)
 	}
 
@@ -136,6 +146,7 @@ func TestReadScenarioPendingWhenDrainerOffline(t *testing.T) {
 	defer server.Close()
 
 	pairID := "01J9ZX0PAIR000000000000002"
+	session := newScenarioSession(pairID)
 	cliClient := relay.New(server.URL(), pairID)
 
 	job := jobs.NewReadJob(
@@ -150,7 +161,7 @@ func TestReadScenarioPendingWhenDrainerOffline(t *testing.T) {
 
 	// --wait 0 makes this a fire-and-forget call. With no drainer running,
 	// the CLI should print a pending status and exit cleanly.
-	if err := executeReadJob(ctx, &out, cliClient, job, 0, true); err != nil {
+	if err := executeReadJob(ctx, &out, cliClient, session, job, 0, true); err != nil {
 		t.Fatalf("executeReadJob: %v", err)
 	}
 
@@ -174,6 +185,65 @@ func TestReadScenarioPendingWhenDrainerOffline(t *testing.T) {
 	}
 }
 
+// TestReadScenarioMismatchedSessionFails verifies that a CLI with a wrong
+// session key cannot decrypt result blobs from a drainer with the right
+// key. This catches the "what if pairing went wrong" case as well as the
+// "encryption is actually being applied" case.
+func TestReadScenarioMismatchedSessionFails(t *testing.T) {
+	server := fakerelay.New()
+	defer server.Close()
+
+	pairID := "01J9ZX0PAIR000000000000004"
+	correct := newScenarioSession(pairID)
+	wrong := &jobs.Session{
+		Key:    bytes.Repeat([]byte{0x99}, crypto.SessionKeySize),
+		PairID: pairID,
+	}
+	cliClient := relay.New(server.URL(), pairID)
+	drainerClient := relay.New(server.URL(), pairID)
+
+	handler := func(_ context.Context, _ *health.Job) (*health.Result, error) {
+		return &health.Result{
+			Status: health.StatusDone,
+			Result: health.ReadResult{Type: health.StepCount, Samples: nil},
+		}, nil
+	}
+	drainer := fakerelay.NewDrainer(drainerClient, correct, handler)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _ = drainer.Run(ctx) }()
+
+	// CLI signs the job with `wrong`. The drainer (with `correct`) will fail
+	// to decrypt and the test loop drainer.Run() will exit. The CLI's
+	// PollResults will time out and report pending — that's the surface the
+	// agent sees when keys don't match.
+	job := jobs.NewReadJob(health.StepCount, time.Now().Add(-1*time.Hour), time.Now())
+	var out bytes.Buffer
+	if err := executeReadJob(ctx, &out, cliClient, wrong, job, 200*time.Millisecond, true); err != nil {
+		t.Fatalf("executeReadJob: %v", err)
+	}
+	if !strings.Contains(out.String(), "pending") {
+		t.Errorf("expected pending status when keys mismatch, got %s", out.String())
+	}
+}
+
+// TestSealedBlobsAreOpaqueOnTheWire verifies that the sealed blob the relay
+// sees does not contain plaintext field names — this is the most direct
+// "encryption actually happens" test.
+func TestSealedBlobsAreOpaqueOnTheWire(t *testing.T) {
+	session := newScenarioSession("01J9ZX0PAIR000000000000005")
+	job := jobs.NewReadJob(health.StepCount, time.Now().Add(-1*time.Hour), time.Now())
+	blob, err := session.SealJob(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"step_count", "read", "from", "payload"} {
+		if strings.Contains(blob, leaked) {
+			t.Errorf("sealed blob leaked plaintext token %q in %s", leaked, blob)
+		}
+	}
+}
+
 // TestReadScenarioFailedResult verifies that a structured error from the
 // iOS handler propagates back as an exit error from the CLI.
 func TestReadScenarioFailedResult(t *testing.T) {
@@ -181,12 +251,12 @@ func TestReadScenarioFailedResult(t *testing.T) {
 	defer server.Close()
 
 	pairID := "01J9ZX0PAIR000000000000003"
+	session := newScenarioSession(pairID)
 	cliClient := relay.New(server.URL(), pairID)
 	drainerClient := relay.New(server.URL(), pairID)
 
-	handler := func(_ context.Context, job *health.Job) (*health.Result, error) {
+	handler := func(_ context.Context, _ *health.Job) (*health.Result, error) {
 		return &health.Result{
-			JobID:  job.ID,
 			Status: health.StatusFailed,
 			Error: &health.JobError{
 				Code:    "scope_denied",
@@ -194,7 +264,7 @@ func TestReadScenarioFailedResult(t *testing.T) {
 			},
 		}, nil
 	}
-	drainer := fakerelay.NewDrainer(drainerClient, handler)
+	drainer := fakerelay.NewDrainer(drainerClient, session, handler)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go func() { _ = drainer.Run(ctx) }()
@@ -202,7 +272,7 @@ func TestReadScenarioFailedResult(t *testing.T) {
 
 	job := jobs.NewReadJob(health.StepCount, time.Now().Add(-1*time.Hour), time.Now())
 	var out bytes.Buffer
-	err := executeReadJob(ctx, &out, cliClient, job, 2*time.Second, false)
+	err := executeReadJob(ctx, &out, cliClient, session, job, 2*time.Second, false)
 	if err == nil {
 		t.Fatal("expected an error from a failed result")
 	}

@@ -69,26 +69,31 @@ func runRead(c *cobra.Command, args []string) error {
 		job.Payload = health.ReadPayload{Type: sampleType, From: from, To: to, Limit: limit}
 	}
 
+	session, err := loadSession(flags)
+	if err != nil {
+		return err
+	}
 	rc := newRelayClient(flags)
 	ctx, cancel := withCancellableContext()
 	defer cancel()
 
-	return executeReadJob(ctx, c.OutOrStdout(), rc, job, resolveWait(flags), flags.JSON)
+	return executeReadJob(ctx, c.OutOrStdout(), rc, session, job, resolveWait(flags), flags.JSON)
 }
 
 // executeReadJob is the body of `read` extracted so scenario tests can drive
-// it directly with their own context, writer, and relay client.
+// it directly with their own context, writer, relay client, and session.
 func executeReadJob(
 	ctx context.Context,
 	out io.Writer,
 	rc *relay.Client,
+	session *jobs.Session,
 	job *health.Job,
 	wait time.Duration,
 	asJSON bool,
 ) error {
-	blob, err := jobs.EncodeJob(job)
+	blob, err := session.SealJob(job)
 	if err != nil {
-		return fmt.Errorf("encode job: %w", err)
+		return fmt.Errorf("seal job: %w", err)
 	}
 	if _, err := rc.EnqueueJob(ctx, job.ID, blob); err != nil {
 		return fmt.Errorf("enqueue: %w", err)
@@ -111,9 +116,9 @@ func executeReadJob(
 
 	// M1: read jobs always produce one result page.
 	first := resp.Results[0]
-	result, err := jobs.DecodeResult(first.Blob)
+	result, err := session.OpenResult(first.JobID, first.PageIndex, first.Blob)
 	if err != nil {
-		return fmt.Errorf("decode result: %w", err)
+		return fmt.Errorf("open result: %w", err)
 	}
 	return emitDone(out, job, result, asJSON)
 }

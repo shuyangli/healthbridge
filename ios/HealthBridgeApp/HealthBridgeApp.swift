@@ -75,21 +75,28 @@ final class AppCoordinator: ObservableObject {
     }
 
     private func drainLoop() async throws {
-        // M1: hard-coded pair + relay URL. M2 introduces real pairing,
-        // and these get loaded from the consent ledger instead.
-        let pairID = ProcessInfo.processInfo.environment["HEALTHBRIDGE_PAIR"] ?? ""
-        let relayURL = URL(string: ProcessInfo.processInfo.environment["HEALTHBRIDGE_RELAY"] ?? "http://127.0.0.1:8787")!
+        // M2: pair_id + session key still come from environment for now;
+        // the real pairing UI lands later in M2 and writes them to the
+        // consent ledger.
+        let env = ProcessInfo.processInfo.environment
+        let pairID = env["HEALTHBRIDGE_PAIR"] ?? ""
+        let relayURL = URL(string: env["HEALTHBRIDGE_RELAY"] ?? "http://127.0.0.1:8787")!
         guard !pairID.isEmpty else {
             throw NSError(domain: "HealthBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "no pair_id configured"])
         }
+        guard let keyHex = env["HEALTHBRIDGE_KEY"], let keyBytes = Data(hexString: keyHex), keyBytes.count == 32 else {
+            throw NSError(domain: "HealthBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: "no valid 32-byte session key in HEALTHBRIDGE_KEY"])
+        }
+        let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: pairID)
         let client = RelayClient(baseURL: relayURL, pairID: pairID)
+
         var cursor: Int64 = 0
         while !Task.isCancelled {
             let page = try await client.pollJobs(since: cursor, waitMs: 25_000)
             for jb in page.jobs {
-                let job = try JobsCodec.decodeJob(jb.blob)
+                let job = try session.openJob(jobID: jb.jobID, blob: jb.blob)
                 let result = try await self.execute(job: job)
-                let blob = try JobsCodec.encode(result)
+                let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
                 _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
                 self.drainedCount += 1
             }

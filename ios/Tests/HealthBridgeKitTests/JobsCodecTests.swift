@@ -1,13 +1,18 @@
 import XCTest
+import CryptoKit
 @testable import HealthBridgeKit
 
 final class JobsCodecTests: XCTestCase {
 
-    func testReadJobRoundTripsThroughBase64() throws {
+    private func newSession(pairID: String = "01J9ZX0PAIR000000000000001") -> JobsSession {
+        let key = SymmetricKey(data: Data(repeating: 0xab, count: 32))
+        return JobsSession(key: key, pairID: pairID)
+    }
+
+    func testReadJobRoundTripsThroughEncryptedBlob() throws {
         let from = ISO8601DateFormatter().date(from: "2026-04-01T00:00:00Z")!
         let to = ISO8601DateFormatter().date(from: "2026-04-07T00:00:00Z")!
         let payload = ReadPayload(type: .stepCount, from: from, to: to, limit: nil)
-
         let job = Job(
             id: "test-job-id",
             kind: .read,
@@ -15,10 +20,13 @@ final class JobsCodecTests: XCTestCase {
             payload: try AnyCodable.from(payload)
         )
 
-        let blob = try JobsCodec.encode(job)
+        let session = newSession()
+        let blob = try session.sealJob(job)
         XCTAssertFalse(blob.isEmpty)
+        // Sealed blob must not leak the field name "step_count" in the clear.
+        XCTAssertFalse(blob.contains("step_count"))
 
-        let decoded = try JobsCodec.decodeJob(blob)
+        let decoded = try session.openJob(jobID: "test-job-id", blob: blob)
         XCTAssertEqual(decoded.id, "test-job-id")
         XCTAssertEqual(decoded.kind, .read)
 
@@ -28,19 +36,31 @@ final class JobsCodecTests: XCTestCase {
         XCTAssertEqual(rp.to, to)
     }
 
-    func testDecodeReadPayloadOnWriteJobThrows() throws {
-        let job = Job(
-            id: "j",
-            kind: .write,
-            createdAt: Date(),
-            payload: AnyCodable([String: Any]())
-        )
-        XCTAssertThrowsError(try job.decodeReadPayload()) { err in
-            XCTAssertEqual(err as? JobDecodeError, .wrongKind(expected: .read, actual: .write))
-        }
+    func testOpenJobRejectsWrongJobID() throws {
+        let session = newSession()
+        let job = Job(id: "real-id", kind: .read, createdAt: Date(), payload: try AnyCodable.from(ReadPayload(type: .stepCount, from: Date(), to: Date().addingTimeInterval(60))))
+        let blob = try session.sealJob(job)
+        XCTAssertThrowsError(try session.openJob(jobID: "wrong-id", blob: blob))
+    }
+
+    func testOpenJobRejectsWrongPair() throws {
+        let a = newSession(pairID: "01J9ZX0PAIR000000000000001")
+        let b = newSession(pairID: "01J9ZX0PAIR000000000000999")
+        let job = Job(id: "id", kind: .read, createdAt: Date(), payload: try AnyCodable.from(ReadPayload(type: .stepCount, from: Date(), to: Date().addingTimeInterval(60))))
+        let blob = try a.sealJob(job)
+        XCTAssertThrowsError(try b.openJob(jobID: "id", blob: blob))
+    }
+
+    func testOpenJobRejectsWrongKey() throws {
+        let session = newSession()
+        let wrong = JobsSession(key: SymmetricKey(data: Data(repeating: 0xcd, count: 32)), pairID: session.pairID)
+        let job = Job(id: "id", kind: .read, createdAt: Date(), payload: try AnyCodable.from(ReadPayload(type: .stepCount, from: Date(), to: Date().addingTimeInterval(60))))
+        let blob = try session.sealJob(job)
+        XCTAssertThrowsError(try wrong.openJob(jobID: "id", blob: blob))
     }
 
     func testJobResultRoundTrip() throws {
+        let session = newSession()
         let sample = Sample(
             type: .stepCount,
             value: 8421,
@@ -54,9 +74,8 @@ final class JobsCodecTests: XCTestCase {
             status: .done,
             result: try AnyCodable.from(ReadResult(type: .stepCount, samples: [sample]))
         )
-
-        let blob = try JobsCodec.encode(result)
-        let decoded = try JobsCodec.decodeResult(blob)
+        let blob = try session.sealResult(jobID: "abc", pageIndex: 0, result)
+        let decoded = try session.openResult(jobID: "abc", pageIndex: 0, blob: blob)
         XCTAssertEqual(decoded.jobID, "abc")
         XCTAssertEqual(decoded.status, .done)
 
@@ -66,7 +85,22 @@ final class JobsCodecTests: XCTestCase {
         XCTAssertEqual(rr.samples[0].value, 8421)
     }
 
-    func testDecodeJobRejectsInvalidBase64() {
-        XCTAssertThrowsError(try JobsCodec.decodeJob("not!base64"))
+    func testOpenResultRejectsWrongPageIndex() throws {
+        let session = newSession()
+        let result = JobResult(jobID: "j", pageIndex: 0, status: .done)
+        let blob = try session.sealResult(jobID: "j", pageIndex: 0, result)
+        XCTAssertThrowsError(try session.openResult(jobID: "j", pageIndex: 1, blob: blob))
+    }
+
+    func testDecodeReadPayloadOnWriteJobThrows() throws {
+        let job = Job(
+            id: "j",
+            kind: .write,
+            createdAt: Date(),
+            payload: AnyCodable([String: Any]())
+        )
+        XCTAssertThrowsError(try job.decodeReadPayload()) { err in
+            XCTAssertEqual(err as? JobDecodeError, .wrongKind(expected: .read, actual: .write))
+        }
     }
 }
