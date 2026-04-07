@@ -167,9 +167,10 @@ final class RelayClientTests: XCTestCase {
     }
 }
 
-private extension URLRequest {
+extension URLRequest {
     /// URLProtocol stubs receive request bodies via httpBodyStream rather
-    /// than httpBody. This helper drains the stream into Data.
+    /// than httpBody. This helper drains the stream into Data. Shared with
+    /// PairingTests; keep it internal so other test files can use it too.
     func bodyStreamData() -> Data? {
         if let body = httpBody { return body }
         guard let stream = httpBodyStream else { return nil }

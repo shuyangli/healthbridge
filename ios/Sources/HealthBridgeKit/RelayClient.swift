@@ -156,6 +156,45 @@ public actor RelayClient {
         let _: Empty = try await request(method: "DELETE", path: "/v1/pair", query: [:], body: Optional<Empty>.none)
     }
 
+    /// State returned by /v1/pair POST and GET. Either field may be nil
+    /// depending on which side has committed so far.
+    public struct PairState: Codable, Sendable, Equatable {
+        public let iosPub: String?
+        public let cliPub: String?
+        public let authToken: String?
+        public let completedAt: Int64?
+
+        enum CodingKeys: String, CodingKey {
+            case iosPub = "ios_pub"
+            case cliPub = "cli_pub"
+            case authToken = "auth_token"
+            case completedAt = "completed_at"
+        }
+    }
+
+    /// Commit one side's pubkey to the pair record. The relay returns the
+    /// (possibly partially-filled) pair state and mints an auth_token once
+    /// both sides have committed.
+    public func postPubkey(side: String, pubkeyHex: String) async throws -> PairState {
+        let body = PostPubkeyRequest(side: side, pubkey: pubkeyHex)
+        return try await request(method: "POST", path: "/v1/pair", query: [:], body: body)
+    }
+
+    /// Long-poll for the pair record to reach completion.
+    public func pollPair(waitMs: Int) async throws -> PairState {
+        return try await request(
+            method: "GET",
+            path: "/v1/pair",
+            query: ["wait_ms": String(waitMs)],
+            body: Optional<Empty>.none
+        )
+    }
+
+    private struct PostPubkeyRequest: Encodable {
+        let side: String
+        let pubkey: String
+    }
+
     // MARK: - Request plumbing
 
     private struct EnqueueRequest: Encodable {
