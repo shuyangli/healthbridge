@@ -1,0 +1,13 @@
+name = "healthbridge-relay"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Per-pair mailboxes are isolated using a Durable Object keyed by pair_id.
+# Free tier supports DO with the workers.dev subdomain.
+[[durable_objects.bindings]]
+name = "PAIR_DO"
+class_name = "PairMailboxDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PairMailboxDO"]

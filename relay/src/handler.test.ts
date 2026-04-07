@@ -1,0 +1,178 @@
+import { describe, it, expect } from "vitest";
+import { Mailbox, MailboxDeps } from "./mailbox.js";
+import { handleRequest } from "./handler.js";
+
+function fakeDeps(): MailboxDeps {
+  return {
+    now: () => 1_000,
+    wait: (_ms, signal) => signal.then(() => undefined).catch(() => undefined),
+  };
+}
+
+function newMailbox() {
+  return new Mailbox(fakeDeps());
+}
+
+const URL_BASE = "https://relay.example.com";
+
+async function call(
+  method: string,
+  path: string,
+  body?: unknown,
+  mailbox = newMailbox(),
+): Promise<{ status: number; body: any; mailbox: Mailbox }> {
+  const init: RequestInit = { method };
+  if (body !== undefined) {
+    init.body = JSON.stringify(body);
+    init.headers = { "content-type": "application/json" };
+  }
+  const res = await handleRequest(new Request(`${URL_BASE}${path}`, init), mailbox, {
+    longPollMs: 0,
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : null;
+  return { status: res.status, body: json, mailbox };
+}
+
+describe("handleRequest routing", () => {
+  it("GET /v1/health returns ok", async () => {
+    const { status, body } = await call("GET", "/v1/health");
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true });
+  });
+
+  it("returns 404 for unknown paths", async () => {
+    const { status, body } = await call("GET", "/v1/nope");
+    expect(status).toBe(404);
+    expect(body.code).toBe("not_found");
+  });
+});
+
+describe("POST /v1/jobs", () => {
+  it("enqueues a valid job", async () => {
+    const { status, body, mailbox } = await call("POST", "/v1/jobs", {
+      job_id: "job-1",
+      blob: "ciphertext",
+    });
+    expect(status).toBe(201);
+    expect(body.seq).toBe(1);
+    expect(body.job_id).toBe("job-1");
+    expect(mailbox.stats().pendingJobs).toBe(1);
+  });
+
+  it("rejects missing job_id", async () => {
+    const { status, body } = await call("POST", "/v1/jobs", { blob: "x" });
+    expect(status).toBe(400);
+    expect(body.code).toBe("missing_job_id");
+  });
+
+  it("rejects missing blob", async () => {
+    const { status, body } = await call("POST", "/v1/jobs", { job_id: "x" });
+    expect(status).toBe(400);
+    expect(body.code).toBe("missing_blob");
+  });
+
+  it("rejects invalid JSON", async () => {
+    const req = new Request(`${URL_BASE}/v1/jobs`, {
+      method: "POST",
+      body: "{not json",
+    });
+    const res = await handleRequest(req, newMailbox(), { longPollMs: 0 });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /v1/jobs (long-poll)", () => {
+  it("returns enqueued jobs since cursor 0", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("a", "blob-a");
+    mb.enqueueJob("b", "blob-b");
+    const { status, body } = await call("GET", "/v1/jobs", undefined, mb);
+    expect(status).toBe(200);
+    expect(body.jobs).toHaveLength(2);
+    expect(body.next_cursor).toBe(2);
+  });
+
+  it("filters by since parameter", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("a", "blob-a");
+    mb.enqueueJob("b", "blob-b");
+    const { body } = await call("GET", "/v1/jobs?since=1", undefined, mb);
+    expect(body.jobs.map((j: any) => j.job_id)).toEqual(["b"]);
+  });
+
+  it("returns empty with original cursor when nothing pending", async () => {
+    const { body } = await call("GET", "/v1/jobs?since=42");
+    expect(body.jobs).toEqual([]);
+    expect(body.next_cursor).toBe(42);
+  });
+});
+
+describe("POST /v1/results", () => {
+  it("accepts a result page", async () => {
+    const mb = newMailbox();
+    const { status, body } = await call(
+      "POST",
+      "/v1/results",
+      { job_id: "j", page_index: 0, blob: "result-blob" },
+      mb,
+    );
+    expect(status).toBe(201);
+    expect(body.job_id).toBe("j");
+    expect(body.page_index).toBe(0);
+    expect(mb.stats().pendingResults).toBe(1);
+  });
+
+  it("rejects negative page_index", async () => {
+    const { status, body } = await call("POST", "/v1/results", {
+      job_id: "j",
+      page_index: -1,
+      blob: "x",
+    });
+    expect(status).toBe(400);
+    expect(body.code).toBe("invalid_page_index");
+  });
+
+  it("rejects duplicate page_index for the same job", async () => {
+    const mb = newMailbox();
+    await call("POST", "/v1/results", { job_id: "j", page_index: 0, blob: "a" }, mb);
+    const { status, body } = await call(
+      "POST",
+      "/v1/results",
+      { job_id: "j", page_index: 0, blob: "b" },
+      mb,
+    );
+    expect(status).toBe(409);
+    expect(body.code).toBe("duplicate_result_page");
+  });
+});
+
+describe("GET /v1/results (long-poll)", () => {
+  it("returns posted pages for the requested job", async () => {
+    const mb = newMailbox();
+    mb.postResult("job-1", 0, "page-0");
+    mb.postResult("job-1", 1, "page-1");
+    mb.postResult("other", 0, "ignored");
+    const { body } = await call("GET", "/v1/results?job_id=job-1", undefined, mb);
+    expect(body.results).toHaveLength(2);
+    expect(body.results.map((r: any) => r.page_index)).toEqual([0, 1]);
+  });
+
+  it("requires job_id", async () => {
+    const { status, body } = await call("GET", "/v1/results");
+    expect(status).toBe(400);
+    expect(body.code).toBe("missing_job_id");
+  });
+});
+
+describe("DELETE /v1/pair", () => {
+  it("revokes the mailbox", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("a", "blob");
+    mb.postResult("a", 0, "result");
+    const { status, body } = await call("DELETE", "/v1/pair", undefined, mb);
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(mb.stats()).toEqual({ pendingJobs: 0, pendingResults: 0, nextSeq: 1 });
+  });
+});

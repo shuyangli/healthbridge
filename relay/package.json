@@ -1,0 +1,17 @@
+{
+  "name": "healthbridge-relay",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cloudflare Worker that brokers encrypted job blobs between the healthbridge CLI and the iOS app.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0"
+  }
+}

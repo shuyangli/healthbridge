@@ -1,0 +1,200 @@
+// HTTP routing layer that turns fetch requests into Mailbox calls.
+//
+// This is split from durable_object.ts so that the routing logic can be
+// unit-tested with a plain Mailbox instance and a synthetic Request, without
+// pulling in any Workers/Cloudflare types.
+//
+// The contract:
+//
+//   POST   /v1/jobs?pair=<id>           body: { job_id, blob }                       enqueue a job
+//   GET    /v1/jobs?pair=<id>&since=N   long-poll for jobs whose seq > N
+//   POST   /v1/results?pair=<id>        body: { job_id, page_index, blob }           post a result page
+//   GET    /v1/results?pair=<id>&job_id=<j>   long-poll for any result pages for job
+//   DELETE /v1/pair?pair=<id>           wipe a pair
+//   GET    /v1/health                   simple liveness ping
+//
+// All bodies are JSON. All errors are JSON: { code, message }.
+//
+// `pair` is the random ULID established at pairing. The Worker entry point
+// (index.ts) is responsible for routing each pair to its own Durable Object;
+// this handler operates on a single Mailbox.
+
+import { Mailbox, MailboxError, MAX_BLOB_BYTES } from "./mailbox.js";
+
+/** How long a long-poll waits before returning empty. Tunable for tests. */
+export const DEFAULT_LONG_POLL_MS = 25_000;
+
+export interface HandleOptions {
+  /** Override the long-poll wait window. Tests pass a small value. */
+  longPollMs?: number;
+}
+
+export async function handleRequest(
+  request: Request,
+  mailbox: Mailbox,
+  opts: HandleOptions = {},
+): Promise<Response> {
+  const longPollMs = opts.longPollMs ?? DEFAULT_LONG_POLL_MS;
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method.toUpperCase();
+
+  try {
+    if (path === "/v1/health" && method === "GET") {
+      return jsonResponse(200, { ok: true });
+    }
+    if (path === "/v1/jobs" && method === "POST") {
+      return await postJob(request, mailbox);
+    }
+    if (path === "/v1/jobs" && method === "GET") {
+      return await getJobs(url, mailbox, longPollMs);
+    }
+    if (path === "/v1/results" && method === "POST") {
+      return await postResult(request, mailbox);
+    }
+    if (path === "/v1/results" && method === "GET") {
+      return await getResults(url, mailbox, longPollMs);
+    }
+    if (path === "/v1/pair" && method === "DELETE") {
+      mailbox.revoke();
+      return jsonResponse(200, { ok: true });
+    }
+    return errorResponse(404, "not_found", `${method} ${path}`);
+  } catch (err) {
+    if (err instanceof MailboxError) {
+      return errorResponse(err.httpStatus, err.code, err.message);
+    }
+    if (err instanceof BadRequestError) {
+      return errorResponse(400, err.code, err.message);
+    }
+    return errorResponse(500, "internal", (err as Error).message ?? "unknown");
+  }
+}
+
+class BadRequestError extends Error {
+  constructor(public code: string, message: string) {
+    super(message);
+  }
+}
+
+async function postJob(request: Request, mailbox: Mailbox): Promise<Response> {
+  const body = await readJson<{ job_id?: unknown; blob?: unknown }>(request);
+  const jobId = requireString(body.job_id, "job_id");
+  const blob = requireString(body.blob, "blob");
+  const stored = mailbox.enqueueJob(jobId, blob);
+  return jsonResponse(201, {
+    job_id: stored.jobId,
+    seq: stored.seq,
+    enqueued_at: stored.enqueuedAt,
+    expires_at: stored.expiresAt,
+  });
+}
+
+async function getJobs(
+  url: URL,
+  mailbox: Mailbox,
+  longPollMs: number,
+): Promise<Response> {
+  const since = parseIntParam(url, "since", 0);
+  const wait = parseIntParam(url, "wait_ms", longPollMs);
+  const result = await mailbox.pollJobs(since, Math.min(wait, longPollMs));
+  return jsonResponse(200, {
+    jobs: result.jobs.map((j) => ({
+      seq: j.seq,
+      job_id: j.jobId,
+      blob: j.blob,
+      enqueued_at: j.enqueuedAt,
+      expires_at: j.expiresAt,
+    })),
+    next_cursor: result.nextCursor,
+  });
+}
+
+async function postResult(request: Request, mailbox: Mailbox): Promise<Response> {
+  const body = await readJson<{
+    job_id?: unknown;
+    page_index?: unknown;
+    blob?: unknown;
+  }>(request);
+  const jobId = requireString(body.job_id, "job_id");
+  const pageIndex = requireInt(body.page_index, "page_index");
+  const blob = requireString(body.blob, "blob");
+  const stored = mailbox.postResult(jobId, pageIndex, blob);
+  return jsonResponse(201, {
+    job_id: stored.jobId,
+    page_index: stored.pageIndex,
+    posted_at: stored.postedAt,
+    expires_at: stored.expiresAt,
+  });
+}
+
+async function getResults(
+  url: URL,
+  mailbox: Mailbox,
+  longPollMs: number,
+): Promise<Response> {
+  const jobId = url.searchParams.get("job_id");
+  if (!jobId) {
+    throw new BadRequestError("missing_job_id", "job_id query parameter required");
+  }
+  const wait = parseIntParam(url, "wait_ms", longPollMs);
+  const result = await mailbox.pollResults(jobId, Math.min(wait, longPollMs));
+  return jsonResponse(200, {
+    results: result.results.map((r) => ({
+      job_id: r.jobId,
+      page_index: r.pageIndex,
+      blob: r.blob,
+      posted_at: r.postedAt,
+      expires_at: r.expiresAt,
+    })),
+  });
+}
+
+async function readJson<T>(request: Request): Promise<T> {
+  // Cap body size to MAX_BLOB_BYTES + a slack envelope (2 KiB) of JSON keys.
+  const maxBytes = MAX_BLOB_BYTES + 2048;
+  const text = await request.text();
+  if (text.length > maxBytes) {
+    throw new BadRequestError("body_too_large", `body exceeds ${maxBytes} bytes`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new BadRequestError("invalid_json", "request body is not valid JSON");
+  }
+}
+
+function requireString(v: unknown, field: string): string {
+  if (typeof v !== "string" || v.length === 0) {
+    throw new BadRequestError(`missing_${field}`, `${field} required`);
+  }
+  return v;
+}
+
+function requireInt(v: unknown, field: string): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+    throw new BadRequestError(`invalid_${field}`, `${field} must be a non-negative integer`);
+  }
+  return v;
+}
+
+function parseIntParam(url: URL, name: string, fallback: number): number {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new BadRequestError(`invalid_${name}`, `${name} must be a non-negative integer`);
+  }
+  return n;
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function errorResponse(status: number, code: string, message: string): Response {
+  return jsonResponse(status, { code, message });
+}
