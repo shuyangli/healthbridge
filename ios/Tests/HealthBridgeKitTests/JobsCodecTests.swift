@@ -112,6 +112,28 @@ final class JobsCodecTests: XCTestCase {
         XCTAssertFalse(str.contains("\"value\":true"), "unexpected boolean JSON value in \(str)")
     }
 
+    func testFailedJobResultRoundTrip() throws {
+        // The iOS drain loop converts per-job execution failures (e.g.
+        // unsupported sample type) into a JobResult with status=.failed
+        // and an error payload, then seals and posts it so the loop can
+        // proceed to the next job. Verify that shape survives a
+        // seal/open round trip with the error intact.
+        let session = newSession()
+        let result = JobResult(
+            jobID: "bad-job",
+            pageIndex: 0,
+            status: .failed,
+            error: JobError(code: "execute_failed", message: "unsupported sample type step_count")
+        )
+        let blob = try session.sealResult(jobID: "bad-job", pageIndex: 0, result)
+        let decoded = try session.openResult(jobID: "bad-job", pageIndex: 0, blob: blob)
+        XCTAssertEqual(decoded.jobID, "bad-job")
+        XCTAssertEqual(decoded.status, .failed)
+        XCTAssertNil(decoded.result)
+        XCTAssertEqual(decoded.error?.code, "execute_failed")
+        XCTAssertEqual(decoded.error?.message, "unsupported sample type step_count")
+    }
+
     func testOpenResultRejectsWrongPageIndex() throws {
         let session = newSession()
         let result = JobResult(jobID: "j", pageIndex: 0, status: .done)

@@ -214,7 +214,21 @@ final class AppCoordinator: ObservableObject {
             for jb in page.jobs {
                 do {
                     let job = try session.openJob(jobID: jb.jobID, blob: jb.blob)
-                    let result = try await self.execute(job: job)
+                    // Per-job execution failures (e.g. unsupported sample
+                    // type) must NOT abort the drain loop — convert them
+                    // into a failed JobResult so the relay reports the
+                    // error to the agent and the cursor still advances.
+                    let result: JobResult
+                    do {
+                        result = try await self.execute(job: job)
+                    } catch {
+                        log.error("execute failed for job \(job.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        result = JobResult(
+                            jobID: job.id,
+                            status: .failed,
+                            error: JobError(code: "execute_failed", message: error.localizedDescription)
+                        )
+                    }
                     let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
                     _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
                     self.drainedCount += 1
