@@ -263,3 +263,51 @@ describe("DELETE /v1/pair", () => {
     expect(mb.stats()).toEqual({ pendingJobs: 0, pendingResults: 0, nextSeq: 1 });
   });
 });
+
+describe("DELETE /v1/jobs", () => {
+  it("removes the job and its result pages, returns removed=true", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("alpha", "blob-a");
+    mb.enqueueJob("beta", "blob-b");
+    mb.postResult("alpha", 0, "result-a");
+    const { status, body } = await call("DELETE", "/v1/jobs?job_id=alpha", undefined, mb);
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true, removed: true });
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(0);
+  });
+
+  it("returns removed=false when nothing matches", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("alpha", "blob-a");
+    const { status, body } = await call("DELETE", "/v1/jobs?job_id=ghost", undefined, mb);
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true, removed: false });
+    expect(mb.stats().pendingJobs).toBe(1);
+  });
+
+  it("rejects DELETE without a job_id", async () => {
+    const { status, body } = await call("DELETE", "/v1/jobs", undefined);
+    expect(status).toBe(400);
+    expect(body.code).toBe("missing_job_id");
+  });
+});
+
+describe("DELETE /v1/results", () => {
+  it("removes only the result pages, leaves the inbound job", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("alpha", "blob-a");
+    mb.postResult("alpha", 0, "result");
+    const { status, body } = await call("DELETE", "/v1/results?job_id=alpha", undefined, mb);
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true, removed: true });
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(0);
+  });
+
+  it("rejects DELETE without a job_id", async () => {
+    const { status, body } = await call("DELETE", "/v1/results", undefined);
+    expect(status).toBe(400);
+    expect(body.code).toBe("missing_job_id");
+  });
+});

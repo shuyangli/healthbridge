@@ -348,6 +348,37 @@ export class Mailbox {
     for (const w of waiters) w();
   }
 
+  /**
+   * Delete a single job (and any result pages associated with it) by
+   * jobId. Returns true if anything was removed. Used by `DELETE
+   * /v1/jobs?job_id=…` so the CLI can manually unwedge a poisoned job
+   * (e.g. one whose result blob would exceed MAX_BLOB_BYTES) without
+   * having to wait for the 7-day TTL eviction.
+   */
+  deleteJob(jobId: string): boolean {
+    const beforeJobs = this.jobs.length;
+    const beforeResults = this.results.length;
+    this.jobs = this.jobs.filter((j) => j.jobId !== jobId);
+    this.results = this.results.filter((r) => r.jobId !== jobId);
+    // Wake any pollers blocked on results for this job so they observe
+    // the disappearance instead of timing out.
+    this.wakeResultWaiters(jobId);
+    return this.jobs.length < beforeJobs || this.results.length < beforeResults;
+  }
+
+  /**
+   * Delete only the result pages for a jobId, leaving the inbound job
+   * itself in place. Used when the iOS app needs to retry posting a
+   * result for the same job (rare; mostly here for symmetry with
+   * deleteJob).
+   */
+  deleteResultsFor(jobId: string): boolean {
+    const before = this.results.length;
+    this.results = this.results.filter((r) => r.jobId !== jobId);
+    this.wakeResultWaiters(jobId);
+    return this.results.length < before;
+  }
+
   /** Drop everything for this pair (used by DELETE /pair). */
   revoke() {
     this.jobs = [];

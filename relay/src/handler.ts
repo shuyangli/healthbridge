@@ -70,11 +70,27 @@ export async function handleRequest(
     if (path === "/v1/jobs" && method === "GET") {
       return await getJobs(url, mailbox, longPollMs);
     }
+    if (path === "/v1/jobs" && method === "DELETE") {
+      const jobId = url.searchParams.get("job_id");
+      if (!jobId) {
+        throw new BadRequestError("missing_job_id", "job_id query parameter required");
+      }
+      const removed = mailbox.deleteJob(jobId);
+      return jsonResponse(200, { ok: true, removed });
+    }
     if (path === "/v1/results" && method === "POST") {
       return await postResult(request, mailbox);
     }
     if (path === "/v1/results" && method === "GET") {
       return await getResults(url, mailbox, longPollMs);
+    }
+    if (path === "/v1/results" && method === "DELETE") {
+      const jobId = url.searchParams.get("job_id");
+      if (!jobId) {
+        throw new BadRequestError("missing_job_id", "job_id query parameter required");
+      }
+      const removed = mailbox.deleteResultsFor(jobId);
+      return jsonResponse(200, { ok: true, removed });
     }
     if (path === "/v1/pair" && method === "DELETE") {
       mailbox.revoke();

@@ -212,42 +212,132 @@ final class AppCoordinator: ObservableObject {
         while !Task.isCancelled {
             let page = try await client.pollJobs(since: cursor, waitMs: 25_000)
             for jb in page.jobs {
-                do {
-                    let job = try session.openJob(jobID: jb.jobID, blob: jb.blob)
-                    // Per-job execution failures (e.g. unsupported sample
-                    // type) must NOT abort the drain loop — convert them
-                    // into a failed JobResult so the relay reports the
-                    // error to the agent and the cursor still advances.
-                    let result: JobResult
-                    do {
-                        result = try await self.execute(job: job)
-                    } catch {
-                        log.error("execute failed for job \(job.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                        result = JobResult(
-                            jobID: job.id,
-                            status: .failed,
-                            error: JobError(code: "execute_failed", message: error.localizedDescription)
-                        )
-                    }
-                    let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
-                    _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
-                    self.drainedCount += 1
-                } catch let err as RelayClient.RelayError where err.code == "duplicate_result_page" {
-                    // We crashed (or this loop restarted) between executing
-                    // and persisting the cursor for this seq. The relay
-                    // already has the result page; advance the cursor and
-                    // move on rather than getting stuck.
-                    log.info("tolerating duplicate_result_page for seq=\(jb.seq, privacy: .public) — advancing cursor")
+                let outcome = await self.processOneJob(jb: jb, session: session, client: client)
+                switch outcome {
+                case .processed, .skipped:
+                    // Persist after every job, not just at the end of
+                    // the page, so a crash mid-page doesn't replay
+                    // earlier jobs.
+                    cursor = jb.seq
+                    self.advanceCursor(to: jb.seq)
+                case .transient(let err):
+                    // Network/5xx failure on the relay POST. Don't
+                    // advance — the next loop iteration will retry the
+                    // same job. Re-throw to bubble up so the parent
+                    // task either retries or surfaces the error.
+                    throw err
                 }
-                // Persist after every job, not just at the end of the
-                // page, so a crash mid-page doesn't replay earlier jobs.
-                cursor = jb.seq
-                self.advanceCursor(to: jb.seq)
             }
             if page.nextCursor > cursor {
                 cursor = page.nextCursor
                 self.advanceCursor(to: page.nextCursor)
             }
+        }
+    }
+
+    /// Outcome of one drain iteration's per-job step. Distinguishes
+    /// "advance the cursor" from "stop and retry on next foreground".
+    private enum JobOutcome {
+        /// Result was successfully sealed and posted (or an equivalent
+        /// fallback was posted on a permanent error). Cursor advances.
+        case processed
+        /// Job could not be processed at all (e.g. decryption failed
+        /// because of a stale session) but is unrecoverable, so the
+        /// cursor advances anyway to avoid wedging on it.
+        case skipped
+        /// Network or 5xx during the post. Cursor does NOT advance;
+        /// the loop bubbles up the error and retries on next pull.
+        case transient(Error)
+    }
+
+    /// Wire-format error codes the relay returns when a result blob
+    /// cannot be accepted at all. The iOS side treats these as
+    /// "permanent" — replace the result with a tiny failure payload,
+    /// post that, and advance the cursor. Anything not in this set is
+    /// transient (network, 5xx) and the cursor stays put.
+    ///
+    /// Keep in sync with relay/src/handler.ts and mailbox.ts.
+    private static let permanentPostErrorCodes: Set<String> = [
+        "blob_too_large",
+        "body_too_large",
+        "invalid_blob",
+        "invalid_job_id",
+        "invalid_page_index",
+        "too_many_result_pages",
+    ]
+
+    private func processOneJob(
+        jb: RelayClient.JobBlob,
+        session: JobsSession,
+        client: RelayClient
+    ) async -> JobOutcome {
+        // Decryption / decoding failures are unrecoverable for this
+        // specific blob — the most common cause is a stale ciphertext
+        // from a previous pair. Skip and advance.
+        let job: Job
+        do {
+            job = try session.openJob(jobID: jb.jobID, blob: jb.blob)
+        } catch {
+            log.error("openJob failed for seq=\(jb.seq, privacy: .public): \(error.localizedDescription, privacy: .public) — skipping")
+            return .skipped
+        }
+
+        // Per-job execution failures (e.g. unsupported sample type)
+        // must NOT abort the drain loop — convert them into a failed
+        // JobResult so the relay reports the error to the agent and
+        // the cursor still advances.
+        let result: JobResult
+        do {
+            result = try await self.execute(job: job)
+        } catch {
+            log.error("execute failed for job \(job.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            result = JobResult(
+                jobID: job.id,
+                status: .failed,
+                error: JobError(code: "execute_failed", message: error.localizedDescription)
+            )
+        }
+
+        do {
+            let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
+            _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
+            self.drainedCount += 1
+            return .processed
+        } catch let err as RelayClient.RelayError where err.code == "duplicate_result_page" {
+            // We crashed (or this loop restarted) between executing
+            // and persisting the cursor for this seq. The relay
+            // already has the result page; advance and move on.
+            log.info("tolerating duplicate_result_page for seq=\(jb.seq, privacy: .public) — advancing cursor")
+            return .processed
+        } catch let err as RelayClient.RelayError where Self.permanentPostErrorCodes.contains(err.code) {
+            // The result blob can't be posted as-is — most often
+            // because it exceeds the relay's MAX_BLOB_BYTES cap.
+            // Without this branch the iOS drain loop would re-fetch
+            // and re-execute the same poison job on every foreground
+            // forever. Replace the oversized result with a tiny
+            // failure payload that comfortably fits and try once more
+            // so the agent sees something concrete instead of
+            // permanently `pending`.
+            log.error("permanent post failure for seq=\(jb.seq, privacy: .public) (\(err.code, privacy: .public)) — posting fallback failure result")
+            let fallback = JobResult(
+                jobID: job.id,
+                status: .failed,
+                error: JobError(
+                    code: err.code,
+                    message: "result was too large for the relay; narrow --from or pass --limit"
+                )
+            )
+            do {
+                let fallbackBlob = try session.sealResult(jobID: job.id, pageIndex: 0, fallback)
+                _ = try await client.postResult(jobID: job.id, pageIndex: 0, blob: fallbackBlob)
+            } catch {
+                log.error("fallback post also failed for seq=\(jb.seq, privacy: .public): \(error.localizedDescription, privacy: .public) — advancing anyway to unwedge")
+            }
+            return .processed
+        } catch {
+            // Network error, 5xx, anything else. Treat as transient.
+            log.error("transient post failure for seq=\(jb.seq, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return .transient(error)
         }
     }
 

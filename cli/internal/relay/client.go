@@ -176,6 +176,40 @@ func (c *Client) PollResults(ctx context.Context, jobID string, waitMs int) (*Re
 	return &out, nil
 }
 
+// PruneAck is the relay's response to DELETE /v1/jobs and DELETE /v1/results.
+// `Removed` is true if any matching record was actually purged.
+type PruneAck struct {
+	OK      bool `json:"ok"`
+	Removed bool `json:"removed"`
+}
+
+// PruneJob asks the relay to drop a single inbound job (and any of its
+// result pages) from the per-pair mailbox without waiting for TTL
+// eviction. Used by `healthbridge prune` to manually unwedge a poison
+// job — e.g. one whose result blob would exceed MAX_BLOB_BYTES.
+func (c *Client) PruneJob(ctx context.Context, jobID string) (*PruneAck, error) {
+	q := url.Values{}
+	q.Set("job_id", jobID)
+	var out PruneAck
+	if err := c.do(ctx, "DELETE", "/v1/jobs", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// PruneResults asks the relay to drop the result pages for a job while
+// leaving the inbound job itself in place. Mostly here for symmetry
+// with PruneJob.
+func (c *Client) PruneResults(ctx context.Context, jobID string) (*PruneAck, error) {
+	q := url.Values{}
+	q.Set("job_id", jobID)
+	var out PruneAck
+	if err := c.do(ctx, "DELETE", "/v1/results", q, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // RevokePair tells the relay to drop this pair's mailbox entirely.
 func (c *Client) RevokePair(ctx context.Context) error {
 	return c.do(ctx, "DELETE", "/v1/pair", nil, nil, nil)

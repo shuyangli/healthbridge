@@ -302,3 +302,54 @@ describe("Mailbox eviction", () => {
     expect(mb.stats().pendingJobs).toBe(0);
   });
 });
+
+describe("Mailbox.deleteJob", () => {
+  it("removes the job and any result pages and reports true", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.enqueueJob("alpha", "blob-a");
+    mb.enqueueJob("beta", "blob-b");
+    mb.postResult("alpha", 0, "result-a-0");
+    mb.postResult("alpha", 1, "result-a-1");
+    mb.postResult("beta", 0, "result-b");
+
+    const removed = mb.deleteJob("alpha");
+    expect(removed).toBe(true);
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(1);
+  });
+
+  it("returns false when nothing matches the jobId", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.enqueueJob("alpha", "blob-a");
+    expect(mb.deleteJob("not-a-job")).toBe(false);
+    expect(mb.stats().pendingJobs).toBe(1);
+  });
+
+  it("wakes any pollers waiting on the deleted jobId", async () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.enqueueJob("ghost", "blob");
+    // Start a poll for ghost's results, then delete the job. The
+    // poller should observe an empty result set rather than waiting
+    // out the long-poll window.
+    const pollPromise = mb.pollResults("ghost", 1000);
+    mb.deleteJob("ghost");
+    const result = await pollPromise;
+    expect(result.results).toEqual([]);
+  });
+});
+
+describe("Mailbox.deleteResultsFor", () => {
+  it("removes only the result pages, not the inbound job", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.enqueueJob("alpha", "blob-a");
+    mb.postResult("alpha", 0, "result");
+    expect(mb.deleteResultsFor("alpha")).toBe(true);
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(0);
+  });
+
+  it("returns false when no results match", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    expect(mb.deleteResultsFor("ghost")).toBe(false);
+  });
+});
