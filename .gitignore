@@ -30,3 +30,4 @@ ios/**/*.xcuserstate
 .vscode/
 .idea/
 *.swp
+.envrc

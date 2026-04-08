@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/shuyangli/healthbridge/cli/internal/config"
 	"github.com/shuyangli/healthbridge/cli/internal/relay"
 )
 
@@ -27,6 +28,18 @@ func commonFromCmd(c *cobra.Command) (commonFlags, error) {
 	asJSON, _ := c.Flags().GetBool("json")
 	if pair == "" {
 		return commonFlags{}, errors.New("--pair is required (run `healthbridge pair`, set HEALTHBRIDGE_PAIR, or save a default in ~/.healthbridge/config)")
+	}
+	// Pair-record fallback: when nothing on the command line, env, or
+	// active default config supplied a relay URL, defaultRelayURL()
+	// hands back the localhost dev sentinel. The pair record itself
+	// stores the URL the pairing flow used, so prefer that over the
+	// localhost fallback. This is what makes `healthbridge read X` work
+	// after `healthbridge pair` even on a fresh machine that never had
+	// ~/.healthbridge/config written.
+	if relayURL == localDevRelayURL && !c.Flags().Changed("relay") {
+		if rec, err := config.LoadPair(configDir(), pair); err == nil && rec.RelayURL != "" {
+			relayURL = rec.RelayURL
+		}
 	}
 	return commonFlags{
 		RelayURL: relayURL,

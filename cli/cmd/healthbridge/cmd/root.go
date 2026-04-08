@@ -49,6 +49,12 @@ end-to-end encrypted (M2+); the relay is a dumb mailbox.
 
 In M1 only ` + "`read`" + ` is supported, and blobs are plaintext base64.`
 
+// localDevRelayURL is the fallback the CLI uses when no other source
+// names a relay. Lives here as a named constant so commonFromCmd can
+// detect "user didn't override the default" and apply the
+// pair-record-derived fallback below it.
+const localDevRelayURL = "http://127.0.0.1:8787"
+
 func defaultRelayURL() string {
 	if v := envOrEmpty("HEALTHBRIDGE_RELAY"); v != "" {
 		return v
@@ -56,7 +62,7 @@ func defaultRelayURL() string {
 	if cfg, err := loadDefaultConfig(); err == nil && cfg.RelayURL != "" {
 		return cfg.RelayURL
 	}
-	return "http://127.0.0.1:8787"
+	return localDevRelayURL
 }
 
 func defaultPairID() string {

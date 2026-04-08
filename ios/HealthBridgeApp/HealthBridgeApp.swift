@@ -320,6 +320,26 @@ final class AppCoordinator: ObservableObject {
         ascending: false
     )
 
+    /// Hard cap on samples per read result. The relay rejects any
+    /// blob over MAX_BLOB_BYTES (1 MiB at the time of writing — see
+    /// relay/src/mailbox.ts). With ChaCha20-Poly1305 + base64 + JSON
+    /// envelope overhead each sample averages 350-450 bytes
+    /// post-encryption, so 2000 samples comfortably fits under the
+    /// 1 MiB cap with headroom for source metadata. The newest-first
+    /// sort means truncation drops the OLDEST samples first; agents
+    /// that need older data should narrow `--from` or pass `--limit`.
+    private static let maxSamplesPerReadResult = 2000
+
+    /// Resolve the HKSampleQuery limit from the wire payload. A nil
+    /// or zero `payload.limit` means "as many as fit in one result
+    /// blob"; an explicit limit is honoured up to the hard cap.
+    private static func resolveReadLimit(_ requested: Int?) -> Int {
+        guard let r = requested, r > 0 else {
+            return maxSamplesPerReadResult
+        }
+        return min(r, maxSamplesPerReadResult)
+    }
+
     private func runQuantityReadQuery(payload: ReadPayload) async throws -> [Sample] {
         guard let qType = HealthKitMapping.quantityType(for: payload.type) else {
             throw NSError(
@@ -335,7 +355,7 @@ final class AppCoordinator: ObservableObject {
             let q = HKSampleQuery(
                 sampleType: qType,
                 predicate: predicate,
-                limit: payload.limit ?? HKObjectQueryNoLimit,
+                limit: Self.resolveReadLimit(payload.limit),
                 sortDescriptors: [Self.sortNewestFirst]
             ) { _, raw, error in
                 if let error = error {
@@ -380,7 +400,7 @@ final class AppCoordinator: ObservableObject {
             let q = HKSampleQuery(
                 sampleType: cType,
                 predicate: predicate,
-                limit: payload.limit ?? HKObjectQueryNoLimit,
+                limit: Self.resolveReadLimit(payload.limit),
                 sortDescriptors: [Self.sortNewestFirst]
             ) { _, raw, error in
                 if let error = error {
@@ -420,7 +440,7 @@ final class AppCoordinator: ObservableObject {
             let q = HKSampleQuery(
                 sampleType: .workoutType(),
                 predicate: predicate,
-                limit: payload.limit ?? HKObjectQueryNoLimit,
+                limit: Self.resolveReadLimit(payload.limit),
                 sortDescriptors: [Self.sortNewestFirst]
             ) { _, raw, error in
                 if let error = error {
