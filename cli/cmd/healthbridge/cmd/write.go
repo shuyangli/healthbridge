@@ -134,8 +134,32 @@ func parseMetaFlags(items []string) (map[string]any, error) {
 	return out, nil
 }
 
-// executeWriteJob is the body of `write` extracted so scenario tests can
-// drive it directly.
+// executeWriteJob is the body of `write` extracted so scenario tests
+// can drive it directly.
+//
+// Writes are fire-and-forget: we enqueue the job, mirror it locally,
+// and emit a `pending` status. We do NOT long-poll for the result
+// like read/sync/profile do. The iOS drain ticker (10 s cadence)
+// will pick up the job, save it via HKHealthStore.save, and post a
+// persistent result. Users who care about the HealthKit-assigned UUID
+// can `healthbridge jobs wait <id>` to fetch it after the fact.
+//
+// Why fire-and-forget? Two reasons:
+//
+//   1. Long-polling here would force the CLI user to sit through up
+//      to 25 seconds of "is it drained yet?" for every write. With
+//      the new 10-s tick the iOS app's worst-case drain latency is
+//      ~10 s, but the CLI doesn't need to block on it.
+//
+//   2. Long-polls dominate Cloudflare GB-second billing on the relay.
+//      The previous design held a DO open for 25 s on every write
+//      result poll, even though the result blob is a single UUID. By
+//      not polling here we collapse the per-write DO wall-time from
+//      25 s to a couple of milliseconds (just the enqueue).
+//
+// The persistent flag on the iOS-side result post means the result
+// stays in the relay's snapshot until the CLI later acks it via
+// `jobs wait` (or until the 24-hour TTL sweep), so nothing is lost.
 func executeWriteJob(
 	ctx context.Context,
 	out io.Writer,
@@ -146,6 +170,7 @@ func executeWriteJob(
 	wait time.Duration,
 	asJSON bool,
 ) error {
+	_ = wait // intentionally unused: writes never long-poll
 	blob, err := session.SealJob(job)
 	if err != nil {
 		return fmt.Errorf("seal job: %w", err)
@@ -156,29 +181,7 @@ func executeWriteJob(
 	if _, err := rc.EnqueueJob(ctx, job.ID, blob); err != nil {
 		return fmt.Errorf("enqueue: %w", err)
 	}
-
-	waitMs := int(wait / time.Millisecond)
-	if waitMs > relay.DefaultLongPollMs {
-		waitMs = relay.DefaultLongPollMs
-	}
-	resp, err := rc.PollResults(ctx, job.ID, waitMs)
-	if err != nil {
-		return fmt.Errorf("poll results: %w", err)
-	}
-	if len(resp.Results) == 0 {
-		return emitPending(out, job, asJSON)
-	}
-
-	first := resp.Results[0]
-	result, err := session.OpenResult(first.JobID, first.PageIndex, first.Blob)
-	if err != nil {
-		return fmt.Errorf("open result: %w", err)
-	}
-	mirrorComplete(store, job.ID, result)
-	// Ack so the relay prunes the (persistent) write result now
-	// rather than holding it for 24h. Best-effort.
-	ackResult(ctx, rc, job.ID)
-	return emitWriteDone(out, job, result, asJSON)
+	return emitPending(out, job, asJSON)
 }
 
 func emitWriteDone(out io.Writer, job *health.Job, result *health.Result, asJSON bool) error {

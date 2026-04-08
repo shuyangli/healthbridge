@@ -162,6 +162,28 @@ final class AppCoordinator: ObservableObject {
     }
 
     // MARK: - Drain loop
+    //
+    // Wakes up every DRAIN_TICK_INTERVAL_MS (10 s) while the app is
+    // foregrounded, asks the relay "anything new?" with a no-wait poll
+    // (waitMs=0), and either:
+    //
+    //   - drains every queued job back-to-back in a tight inner loop
+    //     (no long-polling — once one batch is empty we're done with
+    //     this cycle), or
+    //
+    //   - returns immediately if the relay reports an empty queue.
+    //
+    // Either way, a follow-up tick is scheduled DRAIN_TICK_INTERVAL_MS
+    // later. The DO is therefore "active" for at most a few hundred
+    // milliseconds per tick instead of holding a 25-second long-poll
+    // open every cycle, which is the dominant Cloudflare GB-second cost.
+    //
+    // Foreground-only: stopDrainLoop() cancels the outer task on
+    // backgrounding so we don't burn cycles when the user isn't using
+    // the app.
+
+    /// Wall-clock interval between drain ticks while foregrounded.
+    private static let drainTickIntervalNanos: UInt64 = 10 * 1_000_000_000
 
     func startDrainLoopIfNeeded() {
         guard drainTask == nil else { return }
@@ -170,14 +192,28 @@ final class AppCoordinator: ObservableObject {
             return
         }
         drainTask = Task { @MainActor in
-            do {
-                try await self.drainLoop(pair: pair)
-            } catch is CancellationError {
-                // expected on backgrounding
-            } catch {
-                self.lastError = "\(error)"
-                self.status = "Drain stopped: \(error.localizedDescription)"
+            log.info("drain ticker started, interval=10s")
+            while !Task.isCancelled {
+                do {
+                    try await self.drainCycle(pair: pair)
+                } catch is CancellationError {
+                    // expected on backgrounding; bail out cleanly
+                    break
+                } catch {
+                    // Transient post failure or network blip. Log and
+                    // wait the next tick to retry — no tight retry loop.
+                    self.lastError = "\(error)"
+                    self.status = "Drain hiccup: \(error.localizedDescription)"
+                    log.error("drainCycle failed: \(error.localizedDescription, privacy: .public)")
+                }
+                do {
+                    try await Task.sleep(nanoseconds: Self.drainTickIntervalNanos)
+                } catch {
+                    // Cancelled while sleeping → exit cleanly.
+                    break
+                }
             }
+            log.info("drain ticker stopped")
             self.drainTask = nil
         }
     }
@@ -190,7 +226,11 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    private func drainLoop(pair startingPair: StoredPair) async throws {
+    /// One drain tick. Polls the relay with waitMs=0; if there are
+    /// queued jobs, drains them all (looping until the queue is empty)
+    /// then returns. Never holds a long-poll open. The outer ticker
+    /// schedules the next call.
+    private func drainCycle(pair startingPair: StoredPair) async throws {
         guard let relayURL = URL(string: startingPair.relayURL) else {
             self.status = "Invalid relay URL in stored pair."
             return
@@ -202,15 +242,23 @@ final class AppCoordinator: ObservableObject {
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: startingPair.pairID)
         let client = RelayClient(baseURL: relayURL, pairID: startingPair.pairID, authToken: startingPair.authToken)
 
-        // Resume from the highest seq we've already drained, persisted in
-        // the pair record. This is what makes a foreground/background
-        // cycle (or a process restart) idempotent — without it, we'd
-        // re-execute every job in the relay's mailbox and double-save
-        // HealthKit samples on every wake.
-        var cursor: Int64 = startingPair.lastDrainedSeq
-        log.info("drainLoop start cursor=\(cursor, privacy: .public)")
+        // Resume from the highest seq we've already drained, persisted
+        // in the pair record. Idempotent across foreground/background
+        // cycles and process restarts.
+        var cursor: Int64 = self.pair?.lastDrainedSeq ?? startingPair.lastDrainedSeq
+
+        // Drain everything currently queued. Each iteration is a
+        // no-wait poll (waitMs=0). When a poll returns empty, the
+        // tick is done.
         while !Task.isCancelled {
-            let page = try await client.pollJobs(since: cursor, waitMs: 25_000)
+            let page = try await client.pollJobs(since: cursor, waitMs: 0)
+            if page.jobs.isEmpty {
+                if page.nextCursor > cursor {
+                    cursor = page.nextCursor
+                    self.advanceCursor(to: page.nextCursor)
+                }
+                return
+            }
             for jb in page.jobs {
                 let outcome = await self.processOneJob(jb: jb, session: session, client: client)
                 switch outcome {
@@ -222,9 +270,8 @@ final class AppCoordinator: ObservableObject {
                     self.advanceCursor(to: jb.seq)
                 case .transient(let err):
                     // Network/5xx failure on the relay POST. Don't
-                    // advance — the next loop iteration will retry the
-                    // same job. Re-throw to bubble up so the parent
-                    // task either retries or surfaces the error.
+                    // advance — let the outer ticker retry on the next
+                    // 10-s tick instead of busy-looping here.
                     throw err
                 }
             }
@@ -232,6 +279,8 @@ final class AppCoordinator: ObservableObject {
                 cursor = page.nextCursor
                 self.advanceCursor(to: page.nextCursor)
             }
+            // Loop back: maybe more jobs landed while we were
+            // executing this batch.
         }
     }
 

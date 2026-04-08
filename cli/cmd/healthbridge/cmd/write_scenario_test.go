@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,9 +16,16 @@ import (
 )
 
 // TestWriteScenarioRoundTrip drives a write end-to-end through the
-// fakerelay: the CLI executes the write subcommand body, the FakeIOSDrainer
-// receives the WritePayload, validates it, returns a synthetic UUID, and
-// the CLI prints the UUID back to the user.
+// fakerelay. The new contract for `healthbridge write` is fire-and-
+// forget: executeWriteJob returns immediately with `pending`, never
+// long-polls for the result. We assert:
+//
+//   1. The CLI emitted a `pending` JSON response with the right job_id.
+//   2. The fakerelay drainer eventually picks up the job and sees the
+//      typed WritePayload with the original sample.
+//   3. The drainer's posted result is retrievable from the relay by
+//      anyone who later does the `jobs wait`-equivalent (PollResults
+//      + session.OpenResult), proving the persistent path works.
 func TestWriteScenarioRoundTrip(t *testing.T) {
 	server := fakerelay.New()
 	defer server.Close()
@@ -36,8 +42,6 @@ func TestWriteScenarioRoundTrip(t *testing.T) {
 		if job.Kind != health.KindWrite {
 			return nil, errors.New("expected write job")
 		}
-		// The drainer hands us a typed Job whose Payload is map[string]any
-		// after JSON round-trip; re-decode into the typed struct.
 		pb, err := json.Marshal(job.Payload)
 		if err != nil {
 			return nil, err
@@ -57,7 +61,6 @@ func TestWriteScenarioRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go func() { _ = drainer.Run(ctx) }()
-	defer cancel()
 
 	job := &health.Job{
 		ID:        jobs.NewID(),
@@ -74,14 +77,38 @@ func TestWriteScenarioRoundTrip(t *testing.T) {
 		},
 	}
 
+	// 1. Write should return immediately with pending — no long-poll.
 	var out bytes.Buffer
 	if err := executeWriteJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, true); err != nil {
 		t.Fatalf("executeWriteJob: %v", err)
 	}
+	var resp struct {
+		JobID  string `json:"job_id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("decode JSON output: %v\n%s", err, out.String())
+	}
+	if resp.Status != "pending" {
+		t.Errorf("expected pending, got %q in %s", resp.Status, out.String())
+	}
+	if resp.JobID != job.ID {
+		t.Errorf("job_id = %q, want %q", resp.JobID, job.ID)
+	}
 
-	got := seenSample.Load()
+	// 2. The drainer goroutine should eventually pick up the job and
+	//    record the typed sample. Poll the atomic for up to ~3s.
+	var got *health.Sample
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if g := seenSample.Load(); g != nil {
+			got = g
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if got == nil {
-		t.Fatal("drainer never saw a sample")
+		t.Fatal("drainer never saw a sample after the fire-and-forget enqueue")
 	}
 	if got.Type != health.DietaryEnergyConsumed {
 		t.Errorf("sample type = %q, want dietary_energy_consumed", got.Type)
@@ -93,16 +120,30 @@ func TestWriteScenarioRoundTrip(t *testing.T) {
 		t.Errorf("sample unit = %q, want kcal", got.Unit)
 	}
 
-	var resp struct {
-		JobID  string `json:"job_id"`
-		Status string `json:"status"`
-		UUID   string `json:"uuid"`
+	// 3. The drainer's posted result should be retrievable via the
+	//    relay's poll endpoint, proving the persistent path is
+	//    intact and a later `jobs wait` would find it.
+	pollCtx, pollCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer pollCancel()
+	pollResp, err := cliClient.PollResults(pollCtx, job.ID, 2000)
+	if err != nil {
+		t.Fatalf("poll results: %v", err)
 	}
-	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
-		t.Fatalf("decode JSON output: %v\n%s", err, out.String())
+	if len(pollResp.Results) == 0 {
+		t.Fatal("expected the persistent write result to still be on the relay")
 	}
-	if resp.Status != "done" || resp.UUID != "fake-healthkit-uuid-123" {
-		t.Errorf("unexpected response: %+v", resp)
+	first := pollResp.Results[0]
+	result, err := session.OpenResult(first.JobID, first.PageIndex, first.Blob)
+	if err != nil {
+		t.Fatalf("open result: %v", err)
+	}
+	pb, _ := json.Marshal(result.Result)
+	var wr health.WriteResult
+	if err := json.Unmarshal(pb, &wr); err != nil {
+		t.Fatalf("decode write result: %v", err)
+	}
+	if wr.UUID != "fake-healthkit-uuid-123" {
+		t.Errorf("uuid = %q, want fake-healthkit-uuid-123", wr.UUID)
 	}
 }
 
@@ -142,8 +183,13 @@ func TestParseMetaFlags(t *testing.T) {
 	}
 }
 
-// TestWriteScenarioFailedResult: a structured failure from the iOS handler
-// should propagate as an exit error containing the error code.
+// TestWriteScenarioFailedResult: a write whose iOS handler returns a
+// structured failure should NOT surface synchronously from the
+// `write` subcommand (writes are fire-and-forget). The failure must
+// still be retrievable from the relay so a follow-up `jobs wait`
+// surfaces it to the user. We assert both halves: the write call
+// succeeds and prints `pending`, and the failed result is then
+// readable through the relay's poll path.
 func TestWriteScenarioFailedResult(t *testing.T) {
 	server := fakerelay.New()
 	defer server.Close()
@@ -178,11 +224,41 @@ func TestWriteScenarioFailedResult(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	err := executeWriteJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, false)
-	if err == nil {
-		t.Fatal("expected an error")
+	// The write call itself succeeds — fire-and-forget, no failure
+	// propagation here.
+	if err := executeWriteJob(ctx, &out, cliClient, session, nil, job, 2*time.Second, true); err != nil {
+		t.Fatalf("executeWriteJob unexpectedly errored: %v", err)
 	}
-	if !strings.Contains(err.Error(), "scope_denied") {
-		t.Errorf("error = %v, want it to contain scope_denied", err)
+	var pendingResp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &pendingResp); err != nil {
+		t.Fatalf("decode CLI output: %v\n%s", err, out.String())
+	}
+	if pendingResp.Status != "pending" {
+		t.Errorf("expected pending status in CLI output, got %q in %s", pendingResp.Status, out.String())
+	}
+
+	// The failure is still observable via the relay poll path that
+	// `jobs wait` would use.
+	pollCtx, pollCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer pollCancel()
+	pollResp, err := cliClient.PollResults(pollCtx, job.ID, 2000)
+	if err != nil {
+		t.Fatalf("poll results: %v", err)
+	}
+	if len(pollResp.Results) == 0 {
+		t.Fatal("expected the persistent failure result to be on the relay")
+	}
+	first := pollResp.Results[0]
+	result, err := session.OpenResult(first.JobID, first.PageIndex, first.Blob)
+	if err != nil {
+		t.Fatalf("open result: %v", err)
+	}
+	if result.Status != health.StatusFailed {
+		t.Errorf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "scope_denied" {
+		t.Errorf("error = %+v, want scope_denied", result.Error)
 	}
 }
