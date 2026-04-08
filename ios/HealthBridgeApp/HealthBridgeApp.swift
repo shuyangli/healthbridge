@@ -83,7 +83,14 @@ final class AppCoordinator: ObservableObject {
             if case .authorized = auth, pair != nil {
                 startDrainLoopIfNeeded()
             }
-        case .inactive, .background:
+        case .inactive:
+            // .inactive is transient — iOS sends it for notification
+            // banners, control center pull-down, app switcher preview,
+            // incoming-call sheet, etc. The app is still on screen and
+            // the user expects the drain ticker to keep running. Only
+            // .background means the user actually left the app.
+            break
+        case .background:
             stopDrainLoop()
         @unknown default:
             break
@@ -185,6 +192,25 @@ final class AppCoordinator: ObservableObject {
     /// Wall-clock interval between drain ticks while foregrounded.
     private static let drainTickIntervalNanos: UInt64 = 10 * 1_000_000_000
 
+    /// How long each drain tick will hold the relay's pollJobs open
+    /// before giving up and going back to sleep. 1 second is a
+    /// compromise between two extremes:
+    ///
+    ///   - waitMs=0: instant return, but a job enqueued at second 1
+    ///     of the 10-second sleep window has to wait the full ~9s
+    ///     for the next tick. Worst-case ack latency is the entire
+    ///     tick interval.
+    ///
+    ///   - waitMs=25_000 (the relay's default): every tick holds
+    ///     the per-pair Durable Object open for 25s of GB-second
+    ///     billable wall time. This is the cost regression we're
+    ///     trying to avoid.
+    ///
+    /// 1 second of long-poll catches anything posted within the
+    /// (small) window between an enqueue and the next tick at a
+    /// fraction of the cost.
+    private static let drainPollWaitMs: Int = 1000
+
     func startDrainLoopIfNeeded() {
         guard drainTask == nil else { return }
         guard let pair = pair else {
@@ -247,11 +273,12 @@ final class AppCoordinator: ObservableObject {
         // cycles and process restarts.
         var cursor: Int64 = self.pair?.lastDrainedSeq ?? startingPair.lastDrainedSeq
 
-        // Drain everything currently queued. Each iteration is a
-        // no-wait poll (waitMs=0). When a poll returns empty, the
-        // tick is done.
+        // Drain everything currently queued. Each iteration uses a
+        // short long-poll (drainPollWaitMs) so a job enqueued just
+        // before this tick fires can be picked up immediately. When
+        // a poll returns empty, the tick is done.
         while !Task.isCancelled {
-            let page = try await client.pollJobs(since: cursor, waitMs: 0)
+            let page = try await client.pollJobs(since: cursor, waitMs: Self.drainPollWaitMs)
             if page.jobs.isEmpty {
                 if page.nextCursor > cursor {
                     cursor = page.nextCursor
