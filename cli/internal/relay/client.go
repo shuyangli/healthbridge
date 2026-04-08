@@ -111,15 +111,23 @@ type JobBlob struct {
 
 // JobsPage is the response from GET /v1/jobs.
 type JobsPage struct {
-	Jobs       []JobBlob `json:"jobs"`
-	NextCursor int64     `json:"next_cursor"`
+	Jobs []JobBlob `json:"jobs"`
+	// NextCursorMs is a Unix-millis timestamp — the maximum
+	// enqueued_at among the returned jobs (or the input since_ms if
+	// the page was empty). The poller persists this and feeds it
+	// back as the next call's `since_ms`.
+	NextCursorMs int64 `json:"next_cursor_ms"`
 }
 
-// PollJobs long-polls for jobs whose seq > since. waitMs is sent as
-// wait_ms; the relay will return early if a job arrives sooner.
-func (c *Client) PollJobs(ctx context.Context, since int64, waitMs int) (*JobsPage, error) {
+// PollJobs long-polls for jobs enqueued after the given Unix-millis
+// timestamp. The cursor is wall-clock based rather than the relay's
+// internal seq counter so that storage migrations can't desync the
+// poller's view (see relay/src/mailbox.ts pollJobs for the
+// rationale). waitMs is sent as wait_ms; the relay will return early
+// if a new job arrives sooner.
+func (c *Client) PollJobs(ctx context.Context, sinceMs int64, waitMs int) (*JobsPage, error) {
 	q := url.Values{}
-	q.Set("since", fmt.Sprintf("%d", since))
+	q.Set("since_ms", fmt.Sprintf("%d", sinceMs))
 	q.Set("wait_ms", fmt.Sprintf("%d", waitMs))
 	var out JobsPage
 	if err := c.do(ctx, "GET", "/v1/jobs", q, nil, &out); err != nil {

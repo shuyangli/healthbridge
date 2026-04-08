@@ -132,9 +132,12 @@ async function getJobs(
   mailbox: Mailbox,
   longPollMs: number,
 ): Promise<Response> {
-  const since = parseIntParam(url, "since", 0);
+  // Cursor is a Unix-millis timestamp. The legacy `since` query
+  // param (relay-internal seq counter) is no longer accepted — see
+  // mailbox.ts pollJobs for the rationale.
+  const sinceMs = parseIntParam(url, "since_ms", 0);
   const wait = parseIntParam(url, "wait_ms", longPollMs);
-  const result = await mailbox.pollJobs(since, Math.min(wait, longPollMs));
+  const result = await mailbox.pollJobs(sinceMs, Math.min(wait, longPollMs));
   return jsonResponse(200, {
     jobs: result.jobs.map((j) => ({
       seq: j.seq,
@@ -143,7 +146,7 @@ async function getJobs(
       enqueued_at: j.enqueuedAt,
       expires_at: j.expiresAt,
     })),
-    next_cursor: result.nextCursor,
+    next_cursor_ms: result.nextCursor,
   });
 }
 

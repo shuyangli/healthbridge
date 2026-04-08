@@ -54,10 +54,15 @@ public actor RelayClient {
 
     public struct JobsPage: Codable, Sendable {
         public let jobs: [JobBlob]
-        public let nextCursor: Int64
+        /// Unix-millis timestamp of the most recent job in the page
+        /// (or the input since_ms if the page was empty). The drain
+        /// loop persists this and feeds it back as the next call's
+        /// since_ms. Wall-clock based so storage migrations on the
+        /// relay side can't desync the cursor.
+        public let nextCursorMs: Int64
         enum CodingKeys: String, CodingKey {
             case jobs
-            case nextCursor = "next_cursor"
+            case nextCursorMs = "next_cursor_ms"
         }
     }
 
@@ -129,11 +134,15 @@ public actor RelayClient {
         return try await request(method: "POST", path: "/v1/jobs", query: [:], body: body)
     }
 
-    public func pollJobs(since: Int64, waitMs: Int) async throws -> JobsPage {
+    /// Long-poll for jobs enqueued after the given Unix-millis
+    /// timestamp. The cursor is wall-clock based rather than the
+    /// relay's internal seq counter so the iOS-side state can't
+    /// desync from the relay across DO storage migrations.
+    public func pollJobs(sinceMs: Int64, waitMs: Int) async throws -> JobsPage {
         return try await request(
             method: "GET",
             path: "/v1/jobs",
-            query: ["since": String(since), "wait_ms": String(waitMs)],
+            query: ["since_ms": String(sinceMs), "wait_ms": String(waitMs)],
             body: Optional<Empty>.none
         )
     }

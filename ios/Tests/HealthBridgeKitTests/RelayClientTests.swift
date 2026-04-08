@@ -80,7 +80,7 @@ final class RelayClientTests: XCTestCase {
     func testPollJobsDecodesPage() async throws {
         MockURLProtocol.handler = { req in
             let url = req.url!
-            XCTAssertTrue(url.query!.contains("since=0"))
+            XCTAssertTrue(url.query!.contains("since_ms=0"))
             XCTAssertTrue(url.query!.contains("wait_ms=0"))
             let payload: [String: Any] = [
                 "jobs": [
@@ -92,17 +92,17 @@ final class RelayClientTests: XCTestCase {
                         "expires_at": 9000,
                     ]
                 ],
-                "next_cursor": 1,
+                "next_cursor_ms": 1000,
             ]
             let data = try JSONSerialization.data(withJSONObject: payload)
             return (HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
         }
 
         let client = newClient()
-        let page = try await client.pollJobs(since: 0, waitMs: 0)
+        let page = try await client.pollJobs(sinceMs: 0, waitMs: 0)
         XCTAssertEqual(page.jobs.count, 1)
         XCTAssertEqual(page.jobs[0].jobID, "j1")
-        XCTAssertEqual(page.nextCursor, 1)
+        XCTAssertEqual(page.nextCursorMs, 1000)
     }
 
     func testAuthTokenIsAttachedAsBearerHeader() async throws {
@@ -130,7 +130,7 @@ final class RelayClientTests: XCTestCase {
         var capturedAuth: String?
         MockURLProtocol.handler = { req in
             capturedAuth = req.value(forHTTPHeaderField: "authorization")
-            let payload: [String: Any] = ["jobs": [], "next_cursor": 0]
+            let payload: [String: Any] = ["jobs": [], "next_cursor_ms": 0]
             let data = try JSONSerialization.data(withJSONObject: payload)
             return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
         }
@@ -143,7 +143,7 @@ final class RelayClientTests: XCTestCase {
             pairID: "01J9ZX0PAIR000000000000001",
             session: session
         )
-        _ = try await client.pollJobs(since: 0, waitMs: 0)
+        _ = try await client.pollJobs(sinceMs: 0, waitMs: 0)
         XCTAssertNil(capturedAuth)
     }
 

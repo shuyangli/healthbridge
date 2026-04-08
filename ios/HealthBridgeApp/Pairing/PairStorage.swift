@@ -33,12 +33,21 @@ struct StoredPair: Codable, Equatable {
     var cliPubHex: String
     var sas: String
     var pairedAt: Date
-    /// Highest job seq the iOS side has fully drained. Persisted across
-    /// app restarts so a foreground/background cycle does not replay
-    /// already-applied jobs (which would, for write jobs, double-save
-    /// HealthKit samples and trip the relay's duplicate_result_page
-    /// guard). Default 0 = "haven't drained anything yet".
-    var lastDrainedSeq: Int64
+    /// Unix-millis timestamp of the most recent job the iOS side has
+    /// fully drained. Persisted across app restarts so a foreground/
+    /// background cycle does not replay already-applied jobs (which
+    /// would, for write jobs, double-save HealthKit samples and trip
+    /// the relay's duplicate_result_page guard).
+    ///
+    /// Wall-clock based rather than seq-based: relay storage migrations
+    /// can reset the internal seq counter and we don't want the iOS
+    /// cursor to wedge above whatever the relay's nextSeq becomes.
+    /// Timestamps are monotonic across migrations.
+    ///
+    /// Default 0 = "haven't drained anything yet" — the drain loop
+    /// detects this on first run and seeds it to "now" so historical
+    /// jobs in the relay are skipped instead of re-executed.
+    var lastDrainedMs: Int64
 
     enum CodingKeys: String, CodingKey {
         case pairID = "pair_id"
@@ -49,7 +58,7 @@ struct StoredPair: Codable, Equatable {
         case cliPubHex = "cli_pub_hex"
         case sas
         case pairedAt = "paired_at"
-        case lastDrainedSeq = "last_drained_seq"
+        case lastDrainedMs = "last_drained_ms"
     }
 
     init(from result: PairResult, pairedAt: Date = Date()) {
@@ -61,11 +70,15 @@ struct StoredPair: Codable, Equatable {
         self.cliPubHex = result.cliPub.hexString
         self.sas = result.sas
         self.pairedAt = pairedAt
-        self.lastDrainedSeq = 0
+        self.lastDrainedMs = 0
     }
 
     // Custom decode so old pair.json files (written before
-    // last_drained_seq existed) still load.
+    // last_drained_ms existed, or carrying the legacy last_drained_seq
+    // field) still load. Legacy seq values are intentionally NOT
+    // mapped onto the new ms cursor — they're meaningless under the
+    // wall-clock model. The drain loop will treat lastDrainedMs == 0
+    // as "first run" and seed it to now() to skip history.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.pairID = try c.decode(String.self, forKey: .pairID)
@@ -76,7 +89,7 @@ struct StoredPair: Codable, Equatable {
         self.cliPubHex = try c.decode(String.self, forKey: .cliPubHex)
         self.sas = try c.decode(String.self, forKey: .sas)
         self.pairedAt = try c.decode(Date.self, forKey: .pairedAt)
-        self.lastDrainedSeq = try c.decodeIfPresent(Int64.self, forKey: .lastDrainedSeq) ?? 0
+        self.lastDrainedMs = try c.decodeIfPresent(Int64.self, forKey: .lastDrainedMs) ?? 0
     }
 }
 

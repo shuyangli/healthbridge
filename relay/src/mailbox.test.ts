@@ -96,31 +96,36 @@ describe("Mailbox.enqueueJob", () => {
 
 describe("Mailbox.pollJobs", () => {
   it("returns immediately when jobs are already pending", async () => {
-    const mb = new Mailbox(fakeDeps());
-    mb.enqueueJob("a", "blob-a");
-    mb.enqueueJob("b", "blob-b");
+    const deps = fakeDeps(1000);
+    const mb = new Mailbox(deps);
+    mb.enqueueJob("a", "blob-a"); // enqueuedAt = 1000
+    deps.advance(1);
+    mb.enqueueJob("b", "blob-b"); // enqueuedAt = 1001
     const res = await mb.pollJobs(0, 1000);
     expect(res.jobs.map((j) => j.jobId)).toEqual(["a", "b"]);
-    expect(res.nextCursor).toBe(2);
+    expect(res.nextCursor).toBe(1001);
   });
 
-  it("filters by since cursor", async () => {
-    const mb = new Mailbox(fakeDeps());
-    mb.enqueueJob("a", "blob-a"); // seq 1
-    mb.enqueueJob("b", "blob-b"); // seq 2
-    const res = await mb.pollJobs(1, 1000);
+  it("filters by sinceMs cursor", async () => {
+    const deps = fakeDeps(1000);
+    const mb = new Mailbox(deps);
+    mb.enqueueJob("a", "blob-a"); // enqueuedAt = 1000
+    deps.advance(1);
+    mb.enqueueJob("b", "blob-b"); // enqueuedAt = 1001
+    const res = await mb.pollJobs(1000, 1000);
     expect(res.jobs.map((j) => j.jobId)).toEqual(["b"]);
-    expect(res.nextCursor).toBe(2);
+    expect(res.nextCursor).toBe(1001);
   });
 
   it("blocks until a job arrives, then resolves", async () => {
-    const mb = new Mailbox(fakeDeps());
-    const pollPromise = mb.pollJobs(0, 60_000);
+    const deps = fakeDeps(1000);
+    const mb = new Mailbox(deps);
+    const pollPromise = mb.pollJobs(500, 60_000);
     // Enqueue happens after the poll started; the waker should fire.
     setTimeout(() => mb.enqueueJob("late", "blob-late"), 0);
     const res = await pollPromise;
     expect(res.jobs.map((j) => j.jobId)).toEqual(["late"]);
-    expect(res.nextCursor).toBe(1);
+    expect(res.nextCursor).toBe(1000);
   });
 
   it("returns empty with the original cursor on timeout (no jobs)", async () => {

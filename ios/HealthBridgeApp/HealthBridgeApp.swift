@@ -202,15 +202,28 @@ final class AppCoordinator: ObservableObject {
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: startingPair.pairID)
         let client = RelayClient(baseURL: relayURL, pairID: startingPair.pairID, authToken: startingPair.authToken)
 
-        // Resume from the highest seq we've already drained, persisted in
-        // the pair record. This is what makes a foreground/background
-        // cycle (or a process restart) idempotent — without it, we'd
-        // re-execute every job in the relay's mailbox and double-save
-        // HealthKit samples on every wake.
-        var cursor: Int64 = startingPair.lastDrainedSeq
+        // Resume from the wall-clock timestamp of the most recent job
+        // we've already drained, persisted in the pair record. This
+        // makes a foreground/background cycle (or a process restart)
+        // idempotent — without it, we'd re-execute every job in the
+        // relay's mailbox and double-save HealthKit samples on every
+        // wake.
+        //
+        // First-run case: lastDrainedMs == 0 means this is a freshly
+        // installed binary or a freshly paired device. Seed the cursor
+        // to "now" so historical wedged jobs in the relay (e.g. left
+        // over from a botched migration on the relay side) are skipped
+        // instead of re-executed. Anything legitimately in flight at
+        // this exact instant is rare; the user can re-issue.
+        var cursor: Int64 = startingPair.lastDrainedMs
+        if cursor == 0 {
+            cursor = Int64(Date().timeIntervalSince1970 * 1000)
+            log.info("drainLoop first-run cursor seeded to now=\(cursor, privacy: .public)")
+            self.advanceCursor(to: cursor)
+        }
         log.info("drainLoop start cursor=\(cursor, privacy: .public)")
         while !Task.isCancelled {
-            let page = try await client.pollJobs(since: cursor, waitMs: 25_000)
+            let page = try await client.pollJobs(sinceMs: cursor, waitMs: 25_000)
             for jb in page.jobs {
                 let outcome = await self.processOneJob(jb: jb, session: session, client: client)
                 switch outcome {
@@ -218,8 +231,8 @@ final class AppCoordinator: ObservableObject {
                     // Persist after every job, not just at the end of
                     // the page, so a crash mid-page doesn't replay
                     // earlier jobs.
-                    cursor = jb.seq
-                    self.advanceCursor(to: jb.seq)
+                    cursor = jb.enqueuedAt
+                    self.advanceCursor(to: jb.enqueuedAt)
                 case .transient(let err):
                     // Network/5xx failure on the relay POST. Don't
                     // advance — the next loop iteration will retry the
@@ -228,9 +241,9 @@ final class AppCoordinator: ObservableObject {
                     throw err
                 }
             }
-            if page.nextCursor > cursor {
-                cursor = page.nextCursor
-                self.advanceCursor(to: page.nextCursor)
+            if page.nextCursorMs > cursor {
+                cursor = page.nextCursorMs
+                self.advanceCursor(to: page.nextCursorMs)
             }
         }
     }
@@ -379,12 +392,13 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Update the in-memory + on-disk drain cursor for the active pair.
-    /// Failure to persist is logged but non-fatal — the next successful
-    /// save will catch up.
-    private func advanceCursor(to seq: Int64) {
-        guard var p = self.pair, seq > p.lastDrainedSeq else { return }
-        p.lastDrainedSeq = seq
+    /// Update the in-memory + on-disk drain cursor for the active
+    /// pair. The cursor is a Unix-millis timestamp (the enqueued_at
+    /// of the most recent job we drained). Failure to persist is
+    /// logged but non-fatal — the next successful save will catch up.
+    private func advanceCursor(to ms: Int64) {
+        guard var p = self.pair, ms > p.lastDrainedMs else { return }
+        p.lastDrainedMs = ms
         self.pair = p
         do {
             try PairStorage.save(p)

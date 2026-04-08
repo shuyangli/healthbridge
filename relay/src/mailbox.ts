@@ -310,34 +310,49 @@ export class Mailbox {
   }
 
   /**
-   * Long-poll for jobs whose seq > since. Returns immediately if any are
-   * already pending; otherwise waits up to maxWaitMs.
+   * Long-poll for jobs enqueued after `sinceMs` (Unix milliseconds).
+   *
+   * The cursor is wall-clock based rather than the relay-internal seq
+   * counter so that storage migrations / DO state resets cannot
+   * desynchronise the iOS-side cursor from the relay's view of the
+   * world. After a migration the relay's seq might restart at 1 even
+   * though the iOS app's last-drained seq was 308; under the
+   * timestamp model the iOS app's lastDrainedMs is just "the wall-
+   * clock time of the most recent job I drained", which is naturally
+   * monotonic and resilient.
+   *
+   * Returns immediately if any newer jobs are already in the queue;
+   * otherwise waits up to maxWaitMs.
    */
-  async pollJobs(since: number, maxWaitMs: number): Promise<JobsPollResult> {
+  async pollJobs(sinceMs: number, maxWaitMs: number): Promise<JobsPollResult> {
     this.evictExpired();
-    const ready = this.jobsAfter(since);
+    const ready = this.jobsAfter(sinceMs);
     if (ready.length > 0) {
-      return { jobs: ready, nextCursor: this.cursorOf(ready) };
+      return { jobs: ready, nextCursor: this.cursorOf(ready, sinceMs) };
     }
     if (maxWaitMs <= 0) {
-      return { jobs: [], nextCursor: since };
+      return { jobs: [], nextCursor: sinceMs };
     }
     const wakePromise = new Promise<void>((resolve) => {
       this.jobWaiters.push(resolve);
     });
     await this.deps.wait(maxWaitMs, wakePromise);
     this.evictExpired();
-    const after = this.jobsAfter(since);
-    return { jobs: after, nextCursor: this.cursorOf(after, since) };
+    const after = this.jobsAfter(sinceMs);
+    return { jobs: after, nextCursor: this.cursorOf(after, sinceMs) };
   }
 
-  private jobsAfter(since: number): StoredJob[] {
-    return this.jobs.filter((j) => j.seq > since);
+  private jobsAfter(sinceMs: number): StoredJob[] {
+    return this.jobs.filter((j) => j.enqueuedAt > sinceMs);
   }
 
   private cursorOf(found: StoredJob[], fallback = 0): number {
     if (found.length === 0) return fallback;
-    return found[found.length - 1]!.seq;
+    // The "next cursor" is the highest enqueuedAt we returned —
+    // the next poll should pick up anything after that. Jobs are
+    // appended to this.jobs in arrival order so the last one is
+    // the most recent.
+    return found[found.length - 1]!.enqueuedAt;
   }
 
   private wakeJobWaiters() {

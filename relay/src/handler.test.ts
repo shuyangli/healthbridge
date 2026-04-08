@@ -111,21 +111,36 @@ describe("GET /v1/jobs (long-poll)", () => {
     const { status, body } = await call("GET", "/v1/jobs", undefined, mb);
     expect(status).toBe(200);
     expect(body.jobs).toHaveLength(2);
-    expect(body.next_cursor).toBe(2);
+    // fakeDeps freezes time at 1000ms; both enqueues share that
+    // timestamp, so the next_cursor_ms is 1000.
+    expect(body.next_cursor_ms).toBe(1000);
   });
 
-  it("filters by since parameter", async () => {
-    const mb = newMailbox();
-    mb.enqueueJob("a", "blob-a");
-    mb.enqueueJob("b", "blob-b");
-    const { body } = await call("GET", "/v1/jobs?since=1", undefined, mb);
+  it("filters by since_ms parameter", async () => {
+    // Use a mailbox with an advancing fake clock so the two enqueues
+    // get distinct enqueuedAt timestamps.
+    let now = 1_000;
+    const deps: MailboxDeps = {
+      now: () => now,
+      wait: (_ms, signal) => signal.then(() => undefined).catch(() => undefined),
+    };
+    const mb = new Mailbox(deps);
+    mb.postPubkey("ios", "ios-pub", () => "test-token-1");
+    mb.postPubkey("cli", "cli-pub", () => "test-token-2");
+    // Re-derive the auth token after pairing.
+    const localToken = mb.getPair().authToken!;
+    mb.enqueueJob("a", "blob-a"); // enqueuedAt = 1000
+    now = 1_500;
+    mb.enqueueJob("b", "blob-b"); // enqueuedAt = 1500
+    const { body } = await call("GET", "/v1/jobs?since_ms=1000", undefined, mb, localToken);
     expect(body.jobs.map((j: any) => j.job_id)).toEqual(["b"]);
+    expect(body.next_cursor_ms).toBe(1500);
   });
 
   it("returns empty with original cursor when nothing pending", async () => {
-    const { body } = await call("GET", "/v1/jobs?since=42");
+    const { body } = await call("GET", "/v1/jobs?since_ms=42");
     expect(body.jobs).toEqual([]);
-    expect(body.next_cursor).toBe(42);
+    expect(body.next_cursor_ms).toBe(42);
   });
 });
 

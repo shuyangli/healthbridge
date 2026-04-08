@@ -67,8 +67,8 @@ func (d *FakeIOSDrainer) Run(ctx context.Context) error {
 				return err
 			}
 		}
-		if page.NextCursor > d.cursor {
-			d.cursor = page.NextCursor
+		if page.NextCursorMs > d.cursor {
+			d.cursor = page.NextCursorMs
 		}
 	}
 }

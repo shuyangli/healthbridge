@@ -82,11 +82,14 @@ func (r *fakeRelay) handlePostJob(w http.ResponseWriter, req *http.Request) {
 	}
 	r.mu.Lock()
 	r.nextSeq++
+	// Each enqueue gets a distinct enqueuedAt by using nextSeq as
+	// a fake monotonic clock — the real relay uses Date.now() but
+	// the test only cares about strict ordering.
 	jb := JobBlob{
 		Seq:        r.nextSeq,
 		JobID:      body.JobID,
 		Blob:       body.Blob,
-		EnqueuedAt: 1000,
+		EnqueuedAt: 1000 + r.nextSeq,
 		ExpiresAt:  9000,
 	}
 	r.jobs = append(r.jobs, jb)
@@ -100,20 +103,20 @@ func (r *fakeRelay) handlePostJob(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *fakeRelay) handleGetJobs(w http.ResponseWriter, _ *http.Request, q url.Values) {
-	since := parseInt64(q.Get("since"))
+	sinceMs := parseInt64(q.Get("since_ms"))
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var page []JobBlob
 	for _, j := range r.jobs {
-		if j.Seq > since {
+		if j.EnqueuedAt > sinceMs {
 			page = append(page, j)
 		}
 	}
-	cursor := since
+	cursor := sinceMs
 	if len(page) > 0 {
-		cursor = page[len(page)-1].Seq
+		cursor = page[len(page)-1].EnqueuedAt
 	}
-	writeJSON(w, 200, JobsPage{Jobs: page, NextCursor: cursor})
+	writeJSON(w, 200, JobsPage{Jobs: page, NextCursorMs: cursor})
 }
 
 func (r *fakeRelay) handlePostResult(w http.ResponseWriter, req *http.Request) {
@@ -203,12 +206,15 @@ func TestEnqueueJobAndPollJobs(t *testing.T) {
 	if page.Jobs[0].JobID != "job-1" || page.Jobs[1].JobID != "job-2" {
 		t.Errorf("unexpected job order: %+v", page.Jobs)
 	}
-	if page.NextCursor != 2 {
-		t.Errorf("next_cursor = %d, want 2", page.NextCursor)
+	// fakeRelay assigns enqueuedAt = 1000 + seq, so the two enqueues
+	// land at 1001 and 1002. The poller's next cursor is the highest
+	// of those.
+	if page.NextCursorMs != 1002 {
+		t.Errorf("next_cursor_ms = %d, want 1002", page.NextCursorMs)
 	}
 
 	// Second poll with the new cursor returns nothing.
-	page2, err := c.PollJobs(ctx, page.NextCursor, 0)
+	page2, err := c.PollJobs(ctx, page.NextCursorMs, 0)
 	if err != nil {
 		t.Fatalf("poll2: %v", err)
 	}
