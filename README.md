@@ -35,9 +35,14 @@ brew install healthbridge
 brew install shuyangli/tap/healthbridge
 
 healthbridge --version
-healthbridge pair --relay https://healthbridge.shuyang-li.workers.dev
+healthbridge pair --relay https://<your-worker>.workers.dev
 # scan the QR with the HealthBridge iOS app
 ```
+
+You'll need to set up your own Cloudflare Worker as the relay — see
+[`relay/README.md`](relay/README.md) for the deploy steps. The relay
+is a dumb store-and-forward mailbox that only ever sees ciphertext, so
+running your own instance is the safest deployment.
 
 `brew upgrade healthbridge` picks up future releases.
 

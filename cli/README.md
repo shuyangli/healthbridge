@@ -92,9 +92,12 @@ go build -o ./bin/healthbridge ./cmd/healthbridge
 
 The CLI needs two pieces of state to talk to your iPhone:
 
-1. **A relay URL.** Either pass `--relay <url>`, export
-   `HEALTHBRIDGE_RELAY`, or let `healthbridge pair` save it as the active
-   default in `~/.healthbridge/config`.
+1. **A relay URL.** Set up your own Cloudflare Worker as the relay
+   first — see [`../relay/README.md`](../relay/README.md) for the
+   deploy steps. Then either pass `--relay <url>`, export
+   `HEALTHBRIDGE_RELAY`, or let `healthbridge pair` save it as the
+   active default in `~/.healthbridge/config`. The relay is a dumb
+   store-and-forward mailbox that only ever sees ciphertext.
 2. **A pair ID.** Get one by running `healthbridge pair` once (this
    shows a QR for the iOS app to scan). After successful pairing, the
    full session is saved under `~/.config/healthbridge/pairs/<pair_id>.json`
@@ -105,14 +108,14 @@ If you want to override the active default for a shell or script, env vars
 still win:
 
 ```sh
-export HEALTHBRIDGE_RELAY=https://healthbridge.shuyang-li.workers.dev
+export HEALTHBRIDGE_RELAY=https://<your-worker>.workers.dev
 export HEALTHBRIDGE_PAIR=01J...
 ```
 
 ## First-run sanity check
 
 ```sh
-healthbridge pair --relay https://healthbridge.shuyang-li.workers.dev
+healthbridge pair --relay https://<your-worker>.workers.dev
 # scan the QR with the HealthBridge iOS app, confirm SAS on both sides
 
 healthbridge status --json

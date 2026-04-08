@@ -28,6 +28,40 @@ npm test          # vitest, no Workers runtime needed
 npx wrangler dev  # spawns workerd locally on http://127.0.0.1:8787
 ```
 
+## Deploy your own
+
+The relay is designed to be self-hosted — there is no shared
+"healthbridge.example" instance. Each user runs their own Worker on
+their own Cloudflare account. The relay only ever sees ciphertext
+(M2+), so this is the safest deployment.
+
+Cloudflare's free plan is sufficient — Durable Objects on the free
+tier work as long as the DO classes are SQLite-backed, which this
+relay already configures (see `wrangler.toml`'s
+`new_sqlite_classes`).
+
+```sh
+# 1. Sign in once. Opens a browser to authorize wrangler against your
+#    Cloudflare account.
+npx wrangler login
+
+# 2. Pick a unique Worker name. The default `healthbridge` will collide
+#    with any other user's deploy on the same workers.dev subdomain;
+#    change it to something specific to you.
+$EDITOR wrangler.toml   # set `name = "healthbridge-<yourhandle>"`
+
+# 3. Deploy.
+npx wrangler deploy
+```
+
+`wrangler deploy` prints the deployed URL, e.g.
+`https://healthbridge-<yourhandle>.<your-subdomain>.workers.dev`. That
+is the value to pass as `--relay` to the CLI and to set as
+`HEALTHBRIDGE_RELAY` in your shell.
+
+Re-deploying picks up source changes; the per-pair Durable Object
+state survives across deploys.
+
 ## API
 
 ```
