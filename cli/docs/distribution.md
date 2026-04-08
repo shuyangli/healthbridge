@@ -2,7 +2,7 @@
 
 - Owner: shuyangli
 - Last updated: 2026-04-07
-- Current status: in progress — GoReleaser config and release workflow landed; next action is to create the `shuyangli/homebrew-tap` repo, mint a fine-grained PAT, store it as the `HOMEBREW_TAP_GITHUB_TOKEN` Actions secret, and cut `v0.1.0`.
+- Current status: in progress — GoReleaser config (homebrew cask), release workflow, version command, and the `shuyangli/homebrew-tap` repo are all in place. `goreleaser release --snapshot --clean` runs cleanly and the snapshot binary surfaces the injected version. Next action is to add a top-level `LICENSE`, mint the `HOMEBREW_TAP_GITHUB_TOKEN` PAT, store it as an Actions secret, and cut `v0.1.0`.
 
 ## Motivation
 
@@ -59,14 +59,20 @@ Lives at `cli/.goreleaser.yaml`. The workflow runs `goreleaser` with
 Archive name template: `healthbridge_{{ .Version }}_{{ .Os }}_{{ .Arch }}`.
 Checksums file is published alongside.
 
-### Brew formula
+### Brew cask
 
-GoReleaser's `brews:` block auto-generates the formula and pushes a
-PR to `shuyangli/homebrew-tap` on every release using the
-`HOMEBREW_TAP_GITHUB_TOKEN` secret. Formula `test do` block runs
-`#{bin}/healthbridge --version` to confirm the binary launches on the
-target machine — that exercises Cobra wiring without touching the
-relay or HealthKit.
+GoReleaser's `homebrew_casks:` block auto-generates a cask file at
+`Casks/healthbridge.rb` and opens a PR against
+`shuyangli/homebrew-tap` on every release, using the
+`HOMEBREW_TAP_GITHUB_TOKEN` secret. We use a cask (not a formula)
+because GoReleaser's `brews:` is being phased out, and casks are now
+the recommended path for prebuilt-binary CLI tools shipped via a
+personal tap.
+
+Trade-off: casks are macOS-only — Linuxbrew silently skips cask
+files. Linux users install via the tarball path documented in
+`cli/README.md`. The CLI's natural audience is macOS (the agent
+harness runs there), so this isn't a real loss.
 
 ### CI workflow
 
@@ -103,18 +109,23 @@ and runs `goreleaser release --clean` from `cli/`.
 1. **[done]** Add `cli/.goreleaser.yaml`, `.github/workflows/release.yml`,
    and `cli/cmd/healthbridge/cmd/version.go`. Update READMEs to lead
    with brew install.
-2. **[pending — user action]** Create `shuyangli/homebrew-tap` repo
-   with an initial commit (`README.md` is enough). Mint a fine-grained
-   PAT scoped to that repo with `Contents: read/write` and
+2. **[done]** Validate locally with `goreleaser release --snapshot --clean`
+   from `cli/`. Snapshot run produces four tarballs + checksums + a
+   generated `dist/homebrew/Casks/healthbridge.rb`, and the snapshot
+   binary surfaces the injected `Version`/`Commit`/`Date` via both
+   `--version` and `version --json`.
+3. **[done]** Create the `shuyangli/homebrew-tap` repo (public, with
+   an initial `README.md` so the default `main` branch exists for
+   GoReleaser to PR against).
+4. **[pending — user action]** Mint a fine-grained PAT scoped to
+   `shuyangli/homebrew-tap` with `Contents: read/write` and
    `Pull requests: read/write`. Add it as
    `HOMEBREW_TAP_GITHUB_TOKEN` in this repo's Actions secrets.
-3. **[pending]** Add a `LICENSE` file (MIT) to the repo root so the
-   formula's license claim is honest.
-4. **[pending]** Tag `v0.1.0` (`git tag v0.1.0 && git push --tags`).
-   Watch the workflow, confirm the tap PR opens and merges, and
+5. **[pending]** Add a `LICENSE` file (MIT) to the repo root so the
+   cask's `license "MIT"` claim is honest.
+6. **[pending]** Tag `v0.1.0` (`git tag v0.1.0 && git push --tags`).
+   Watch the workflow, confirm the tap PR opens and merges, then
    `brew install shuyangli/tap/healthbridge` end-to-end on a clean
    machine.
-5. **[pending]** Update `cli/README.md` and root `README.md` to point
-   at the published brew install line once it actually resolves.
-6. **[deferred]** Apple Developer ID signing + notarization. Only
+7. **[deferred]** Apple Developer ID signing + notarization. Only
    worth it if direct (non-brew) downloads become the dominant path.

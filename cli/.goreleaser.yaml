@@ -46,15 +46,9 @@ archives:
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     formats: [tar.gz]
-    files:
-      - src: ../README.md
-        dst: README.md
-      - src: ../PRIVACY.md
-        dst: PRIVACY.md
-        info:
-          mode: 0644
-      # NOTE: add a top-level LICENSE before tagging v0.1.0; the brew
-      # formula declares MIT and the tarball should ship the text.
+    # Binary-only tarballs. The README/PRIVACY docs live in the repo
+    # root and can't be referenced via `..` from goreleaser's static
+    # prefix glob. Brew users don't see archive contents anyway.
 
 checksum:
   name_template: 'checksums.txt'
@@ -79,7 +73,7 @@ release:
   prerelease: auto
   name_template: 'v{{ .Version }}'
 
-brews:
+homebrew_casks:
   - name: healthbridge
     repository:
       owner: shuyangli
@@ -96,7 +90,3 @@ brews:
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
-    install: |
-      bin.install "healthbridge"
-    test: |
-      assert_match "healthbridge", shell_output("#{bin}/healthbridge --version")
