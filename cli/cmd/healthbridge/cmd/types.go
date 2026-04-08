@@ -34,10 +34,14 @@ func canonicalUnitForType(t health.SampleType) string {
 		return "kcal"
 	case health.HeartRate, health.HeartRateResting:
 		return "count/min"
-	case health.BodyMass:
+	case health.BodyMass, health.LeanBodyMass:
 		return "kg"
 	case health.BodyMassIndex:
 		return "count"
+	case health.BodyFatPercentage:
+		return "%"
+	case health.Height:
+		return "m"
 	case health.BloodGlucose:
 		return "mg/dL"
 	case health.DietaryProtein, health.DietaryCarbohydrates,

@@ -42,6 +42,9 @@ enum HealthKitMapping {
         case .heartRateResting:      return .restingHeartRate
         case .bodyMass:              return .bodyMass
         case .bodyMassIndex:         return .bodyMassIndex
+        case .bodyFatPercentage:     return .bodyFatPercentage
+        case .leanBodyMass:          return .leanBodyMass
+        case .height:                return .height
         case .bloodGlucose:          return .bloodGlucose
         case .dietaryEnergyConsumed: return .dietaryEnergyConsumed
         case .dietaryProtein:        return .dietaryProtein
@@ -68,8 +71,10 @@ enum HealthKitMapping {
         case .activeEnergyBurned, .basalEnergyBurned, .dietaryEnergyConsumed:
             return "kcal"
         case .heartRate, .heartRateResting:                    return "count/min"
-        case .bodyMass:                                        return "kg"
+        case .bodyMass, .leanBodyMass:                         return "kg"
         case .bodyMassIndex:                                   return "count"
+        case .bodyFatPercentage:                               return "%"
+        case .height:                                          return "m"
         case .bloodGlucose:                                    return "mg/dL"
         case .dietaryProtein, .dietaryCarbohydrates,
              .dietaryFatTotal, .dietaryFatSaturated,
@@ -147,6 +152,10 @@ enum HealthKitMapping {
         case "fl_oz_us":   return .fluidOunceUS()
         case "mg/dl":      return HKUnit(from: "mg/dL")
         case "mmol/l":     return HKUnit(from: "mmol/L")
+        case "%":          return .percent()
+        case "m":          return .meter()
+        case "cm":         return .meterUnit(with: .centi)
+        case "in":         return .inch()
         default:           return HKUnit(from: string) // last-ditch parse
         }
     }
@@ -183,6 +192,9 @@ enum HealthKitMapping {
             .dietaryCaffeine,
             .dietaryWater,
             .bodyMass,
+            .bodyFatPercentage,
+            .leanBodyMass,
+            .height,
         ]
         var out: Set<HKSampleType> = []
         for s in writable {

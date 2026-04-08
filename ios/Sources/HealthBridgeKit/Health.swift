@@ -14,6 +14,9 @@ public enum SampleType: String, Codable, CaseIterable, Sendable {
     case heartRateResting = "heart_rate_resting"
     case bodyMass = "body_mass"
     case bodyMassIndex = "body_mass_index"
+    case bodyFatPercentage = "body_fat_percentage"
+    case leanBodyMass = "lean_body_mass"
+    case height
     case bloodGlucose = "blood_glucose"
     case dietaryEnergyConsumed = "dietary_energy_consumed"
     case dietaryProtein = "dietary_protein"
