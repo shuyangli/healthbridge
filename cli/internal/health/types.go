@@ -10,31 +10,162 @@ import "time"
 // side it is opaque.
 type SampleType string
 
+// SampleType constants. The full set of HKQuantityTypeIdentifier-backed
+// types is enumerated in catalog.go (one Definition per identifier);
+// the constants below are the human-readable Go identifiers for those
+// wire names. Editors adding a new HKQuantityTypeIdentifier should add
+// the constant here AND a Catalog entry in catalog.go.
+//
+// SleepAnalysis and Workout are NOT quantity types — they are
+// HKCategoryType / HKWorkoutType respectively — so they live outside
+// the catalog.
 const (
-	StepCount             SampleType = "step_count"
-	ActiveEnergyBurned    SampleType = "active_energy_burned"
-	BasalEnergyBurned     SampleType = "basal_energy_burned"
-	HeartRate             SampleType = "heart_rate"
-	HeartRateResting      SampleType = "heart_rate_resting"
-	BodyMass              SampleType = "body_mass"
-	BodyMassIndex         SampleType = "body_mass_index"
-	BodyFatPercentage     SampleType = "body_fat_percentage"
-	LeanBodyMass          SampleType = "lean_body_mass"
-	Height                SampleType = "height"
-	BloodGlucose          SampleType = "blood_glucose"
-	DietaryEnergyConsumed SampleType = "dietary_energy_consumed"
-	DietaryProtein        SampleType = "dietary_protein"
-	DietaryCarbohydrates  SampleType = "dietary_carbohydrates"
-	DietaryFatTotal       SampleType = "dietary_fat_total"
-	DietaryFiber          SampleType = "dietary_fiber"
-	DietarySugar          SampleType = "dietary_sugar"
-	DietaryWater          SampleType = "dietary_water"
-	DietaryCaffeine       SampleType = "dietary_caffeine"
-	DietarySodium         SampleType = "dietary_sodium"
-	DietaryCholesterol    SampleType = "dietary_cholesterol"
-	DietaryFatSaturated   SampleType = "dietary_fat_saturated"
-	SleepAnalysis         SampleType = "sleep_analysis"
-	Workout               SampleType = "workout"
+	// Activity
+	StepCount                       SampleType = "step_count"
+	ActiveEnergyBurned              SampleType = "active_energy_burned"
+	BasalEnergyBurned               SampleType = "basal_energy_burned"
+	DistanceWalkingRunning          SampleType = "distance_walking_running"
+	DistanceCycling                 SampleType = "distance_cycling"
+	DistanceSwimming                SampleType = "distance_swimming"
+	DistanceWheelchair              SampleType = "distance_wheelchair"
+	DistanceDownhillSnowSports      SampleType = "distance_downhill_snow_sports"
+	DistanceCrossCountrySkiing      SampleType = "distance_cross_country_skiing"
+	DistancePaddleSports            SampleType = "distance_paddle_sports"
+	DistanceRowing                  SampleType = "distance_rowing"
+	DistanceSkatingSports           SampleType = "distance_skating_sports"
+	PushCount                       SampleType = "push_count"
+	SwimmingStrokeCount             SampleType = "swimming_stroke_count"
+	FlightsClimbed                  SampleType = "flights_climbed"
+	AppleExerciseTime               SampleType = "apple_exercise_time"
+	AppleMoveTime                   SampleType = "apple_move_time"
+	AppleStandTime                  SampleType = "apple_stand_time"
+	VO2Max                          SampleType = "vo2_max"
+	RunningPower                    SampleType = "running_power"
+	RunningSpeed                    SampleType = "running_speed"
+	RunningStrideLength             SampleType = "running_stride_length"
+	RunningVerticalOscillation      SampleType = "running_vertical_oscillation"
+	RunningGroundContactTime        SampleType = "running_ground_contact_time"
+	CyclingPower                    SampleType = "cycling_power"
+	CyclingSpeed                    SampleType = "cycling_speed"
+	CyclingCadence                  SampleType = "cycling_cadence"
+	CyclingFunctionalThresholdPower SampleType = "cycling_functional_threshold_power"
+	CrossCountrySkiingSpeed         SampleType = "cross_country_skiing_speed"
+	PaddleSportsSpeed               SampleType = "paddle_sports_speed"
+	RowingSpeed                     SampleType = "rowing_speed"
+	PhysicalEffort                  SampleType = "physical_effort"
+	WorkoutEffortScore              SampleType = "workout_effort_score"
+	EstimatedWorkoutEffortScore     SampleType = "estimated_workout_effort_score"
+
+	// Body measurements
+	Height                        SampleType = "height"
+	BodyMass                      SampleType = "body_mass"
+	BodyMassIndex                 SampleType = "body_mass_index"
+	LeanBodyMass                  SampleType = "lean_body_mass"
+	BodyFatPercentage             SampleType = "body_fat_percentage"
+	WaistCircumference            SampleType = "waist_circumference"
+	AppleSleepingWristTemperature SampleType = "apple_sleeping_wrist_temperature"
+
+	// Vital signs
+	HeartRate                  SampleType = "heart_rate"
+	HeartRateResting           SampleType = "heart_rate_resting"
+	WalkingHeartRateAverage    SampleType = "walking_heart_rate_average"
+	HeartRateVariabilitySDNN   SampleType = "heart_rate_variability_sdnn"
+	HeartRateRecoveryOneMinute SampleType = "heart_rate_recovery_one_minute"
+	AtrialFibrillationBurden   SampleType = "atrial_fibrillation_burden"
+	OxygenSaturation           SampleType = "oxygen_saturation"
+	BodyTemperature            SampleType = "body_temperature"
+	BloodPressureSystolic      SampleType = "blood_pressure_systolic"
+	BloodPressureDiastolic     SampleType = "blood_pressure_diastolic"
+	RespiratoryRate            SampleType = "respiratory_rate"
+
+	// Lab and test results
+	BloodGlucose             SampleType = "blood_glucose"
+	ElectrodermalActivity    SampleType = "electrodermal_activity"
+	ForcedExpiratoryVolume1  SampleType = "forced_expiratory_volume_1"
+	ForcedVitalCapacity      SampleType = "forced_vital_capacity"
+	InhalerUsage             SampleType = "inhaler_usage"
+	InsulinDelivery          SampleType = "insulin_delivery"
+	NumberOfTimesFallen      SampleType = "number_of_times_fallen"
+	PeakExpiratoryFlowRate   SampleType = "peak_expiratory_flow_rate"
+	PeripheralPerfusionIndex SampleType = "peripheral_perfusion_index"
+
+	// Nutrition
+	DietaryEnergyConsumed     SampleType = "dietary_energy_consumed"
+	DietaryWater              SampleType = "dietary_water"
+	DietaryProtein            SampleType = "dietary_protein"
+	DietaryCarbohydrates      SampleType = "dietary_carbohydrates"
+	DietaryFiber              SampleType = "dietary_fiber"
+	DietarySugar              SampleType = "dietary_sugar"
+	DietaryFatTotal           SampleType = "dietary_fat_total"
+	DietaryFatSaturated       SampleType = "dietary_fat_saturated"
+	DietaryFatMonounsaturated SampleType = "dietary_fat_monounsaturated"
+	DietaryFatPolyunsaturated SampleType = "dietary_fat_polyunsaturated"
+	DietaryCholesterol        SampleType = "dietary_cholesterol"
+	DietarySodium             SampleType = "dietary_sodium"
+	DietaryPotassium          SampleType = "dietary_potassium"
+	DietaryCalcium            SampleType = "dietary_calcium"
+	DietaryIron               SampleType = "dietary_iron"
+	DietaryMagnesium          SampleType = "dietary_magnesium"
+	DietaryPhosphorus         SampleType = "dietary_phosphorus"
+	DietaryZinc               SampleType = "dietary_zinc"
+	DietaryCopper             SampleType = "dietary_copper"
+	DietaryManganese          SampleType = "dietary_manganese"
+	DietaryChromium           SampleType = "dietary_chromium"
+	DietaryIodine             SampleType = "dietary_iodine"
+	DietaryMolybdenum         SampleType = "dietary_molybdenum"
+	DietarySelenium           SampleType = "dietary_selenium"
+	DietaryChloride           SampleType = "dietary_chloride"
+	DietaryCaffeine           SampleType = "dietary_caffeine"
+	DietaryVitaminA           SampleType = "dietary_vitamin_a"
+	DietaryVitaminB6          SampleType = "dietary_vitamin_b6"
+	DietaryVitaminB12         SampleType = "dietary_vitamin_b12"
+	DietaryVitaminC           SampleType = "dietary_vitamin_c"
+	DietaryVitaminD           SampleType = "dietary_vitamin_d"
+	DietaryVitaminE           SampleType = "dietary_vitamin_e"
+	DietaryVitaminK           SampleType = "dietary_vitamin_k"
+	DietaryThiamin            SampleType = "dietary_thiamin"
+	DietaryRiboflavin         SampleType = "dietary_riboflavin"
+	DietaryNiacin             SampleType = "dietary_niacin"
+	DietaryFolate             SampleType = "dietary_folate"
+	DietaryPantothenicAcid    SampleType = "dietary_pantothenic_acid"
+	DietaryBiotin             SampleType = "dietary_biotin"
+
+	// Hearing health
+	EnvironmentalAudioExposure  SampleType = "environmental_audio_exposure"
+	EnvironmentalSoundReduction SampleType = "environmental_sound_reduction"
+	HeadphoneAudioExposure      SampleType = "headphone_audio_exposure"
+
+	// Mobility
+	AppleWalkingSteadiness         SampleType = "apple_walking_steadiness"
+	WalkingSpeed                   SampleType = "walking_speed"
+	WalkingStepLength              SampleType = "walking_step_length"
+	WalkingAsymmetryPercentage     SampleType = "walking_asymmetry_percentage"
+	WalkingDoubleSupportPercentage SampleType = "walking_double_support_percentage"
+	StairAscentSpeed               SampleType = "stair_ascent_speed"
+	StairDescentSpeed              SampleType = "stair_descent_speed"
+	SixMinuteWalkTestDistance      SampleType = "six_minute_walk_test_distance"
+
+	// Reproductive health (quantity)
+	BasalBodyTemperature SampleType = "basal_body_temperature"
+
+	// UV / daylight
+	UVExposure     SampleType = "uv_exposure"
+	TimeInDaylight SampleType = "time_in_daylight"
+
+	// Diving
+	UnderwaterDepth  SampleType = "underwater_depth"
+	WaterTemperature SampleType = "water_temperature"
+
+	// Alcohol
+	BloodAlcoholContent        SampleType = "blood_alcohol_content"
+	NumberOfAlcoholicBeverages SampleType = "number_of_alcoholic_beverages"
+
+	// Sleep (extra quantity, iOS 18+)
+	AppleSleepingBreathingDisturbances SampleType = "apple_sleeping_breathing_disturbances"
+
+	// Non-quantity carryover (HKCategoryType + HKWorkoutType).
+	SleepAnalysis SampleType = "sleep_analysis"
+	Workout       SampleType = "workout"
 )
 
 // AllSampleTypes lists every supported sample type. Used by `healthbridge
