@@ -15,9 +15,11 @@ func Root() *cobra.Command {
 		Use:           "healthbridge",
 		Short:         "Read and write Apple Health data via a serverless relay",
 		Long:          rootLong,
+		Version:       versionString(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.SetVersionTemplate("{{.Version}}\n")
 	root.PersistentFlags().String("relay", defaultRelayURL(), "Base URL of the healthbridge relay")
 	root.PersistentFlags().String("pair", defaultPairID(), "Pair ID (26-char ULID) to talk to. Defaults to the last successful `healthbridge pair`.")
 	root.PersistentFlags().Duration("wait", 0, "How long to long-poll for a result before returning pending. 0 = use the default.")
@@ -32,6 +34,7 @@ func Root() *cobra.Command {
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newWipeCmd())
 	root.AddCommand(newTypesCmd())
+	root.AddCommand(newVersionCmd())
 	return root
 }
 

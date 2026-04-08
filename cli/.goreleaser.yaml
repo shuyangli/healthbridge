@@ -1,0 +1,102 @@
+# GoReleaser config for the healthbridge CLI.
+#
+# Driven by .github/workflows/release.yml on tag push (`v*`). The
+# workflow runs `goreleaser release --clean` with `workdir: cli` so this
+# file is read from cli/.goreleaser.yaml and the build sees cli/go.mod
+# directly.
+#
+# Outputs per release:
+#   - Tarballs for darwin/amd64, darwin/arm64, linux/amd64, linux/arm64
+#   - checksums.txt
+#   - A GitHub Release
+#   - A PR to shuyangli/homebrew-tap bumping the formula
+#
+# See cli/docs/distribution.md for the full design.
+
+version: 2
+
+project_name: healthbridge
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: healthbridge
+    main: ./cmd/healthbridge
+    binary: healthbridge
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/shuyangli/healthbridge/cli/cmd/healthbridge/cmd.Version={{.Version}}
+      - -X github.com/shuyangli/healthbridge/cli/cmd/healthbridge/cmd.Commit={{.FullCommit}}
+      - -X github.com/shuyangli/healthbridge/cli/cmd/healthbridge/cmd.Date={{.Date}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats: [tar.gz]
+    files:
+      - src: ../README.md
+        dst: README.md
+      - src: ../PRIVACY.md
+        dst: PRIVACY.md
+        info:
+          mode: 0644
+      # NOTE: add a top-level LICENSE before tagging v0.1.0; the brew
+      # formula declares MIT and the tarball should ship the text.
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-next'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+
+release:
+  github:
+    owner: shuyangli
+    name: healthbridge
+  draft: false
+  prerelease: auto
+  name_template: 'v{{ .Version }}'
+
+brews:
+  - name: healthbridge
+    repository:
+      owner: shuyangli
+      name: homebrew-tap
+      branch: main
+      token: '{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}'
+      pull_request:
+        enabled: true
+        base:
+          branch: main
+    homepage: https://github.com/shuyangli/healthbridge
+    description: Read and write Apple Health data via an end-to-end-encrypted relay and iOS companion app.
+    license: MIT
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    install: |
+      bin.install "healthbridge"
+    test: |
+      assert_match "healthbridge", shell_output("#{bin}/healthbridge --version")
