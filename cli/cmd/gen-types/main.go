@@ -4,10 +4,14 @@
 //
 //   - proto/schema.json — replaces the $defs.sampleType.enum array.
 //   - skill/healthbridge/references/TYPES.md — full catalog tables.
-//
-// In M3 it will also regenerate ios/Sources/HealthBridgeKit/Generated/
-// Catalog.swift; that target is intentionally absent until the Swift
-// SampleType migration lands so the iOS package keeps building.
+//   - ios/Sources/HealthBridgeKit/Generated/SampleTypeCatalog.swift —
+//     SampleType static-let constants and the .allKnown / .allQuantity
+//     arrays the kit-side code (and HealthKitMapping in the iOS app)
+//     iterate over.
+//   - ios/HealthBridgeApp/Generated/HealthKitCatalog.swift — the
+//     HKQuantityTypeIdentifier and canonical-unit dictionaries the
+//     iOS app's HealthKitMapping looks types up in. iOS-only file
+//     (#if os(iOS) guarded).
 //
 // Usage:
 //
@@ -41,6 +45,11 @@ func main() {
 		fatalf("locate repo root: %v", err)
 	}
 
+	// A target is one file the generator owns. The `gen` callback is
+	// passed the existing on-disk content (empty string if the file
+	// doesn't exist) and returns the desired content. Targets that
+	// don't depend on the existing content (Swift catalog files,
+	// TYPES.md) ignore the argument.
 	type target struct {
 		path string
 		gen  func(string) (string, error)
@@ -54,19 +63,27 @@ func main() {
 			path: filepath.Join(root, "skill", "healthbridge", "references", "TYPES.md"),
 			gen:  func(_ string) (string, error) { return generateTypesMD(), nil },
 		},
+		{
+			path: filepath.Join(root, "ios", "Sources", "HealthBridgeKit", "Generated", "SampleTypeCatalog.swift"),
+			gen:  func(_ string) (string, error) { return generateSwiftSampleTypeCatalog(), nil },
+		},
+		{
+			path: filepath.Join(root, "ios", "HealthBridgeApp", "Generated", "HealthKitCatalog.swift"),
+			gen:  func(_ string) (string, error) { return generateSwiftHealthKitCatalog(), nil },
+		},
 	}
 
 	drift := false
 	for _, t := range targets {
-		existing, err := os.ReadFile(t.path)
+		existing, err := readFileOrEmpty(t.path)
 		if err != nil {
 			fatalf("read %s: %v", t.path, err)
 		}
-		next, err := t.gen(string(existing))
+		next, err := t.gen(existing)
 		if err != nil {
 			fatalf("generate %s: %v", t.path, err)
 		}
-		if next == string(existing) {
+		if next == existing {
 			fmt.Printf("ok       %s\n", relPath(root, t.path))
 			continue
 		}
@@ -74,6 +91,9 @@ func main() {
 			fmt.Printf("DRIFT    %s\n", relPath(root, t.path))
 			drift = true
 			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(t.path), 0o755); err != nil {
+			fatalf("mkdir %s: %v", filepath.Dir(t.path), err)
 		}
 		if err := os.WriteFile(t.path, []byte(next), 0o644); err != nil {
 			fatalf("write %s: %v", t.path, err)
@@ -98,6 +118,20 @@ func repoRoot() (string, error) {
 		return "", fmt.Errorf("runtime.Caller failed")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(this), "..", "..", "..")), nil
+}
+
+// readFileOrEmpty returns the file contents, or "" if the file does
+// not exist (so a brand-new generated file looks like drift in -check
+// mode and gets created in normal mode).
+func readFileOrEmpty(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(b), nil
 }
 
 func relPath(root, p string) string {
@@ -333,3 +367,134 @@ const typesMDFooter = "\n## Picking the right type\n" +
 	"- Power is `W` (watts). HealthKit accepts `W` directly.\n" +
 	"- Temperatures are degrees Celsius (`degC`). HealthKit will convert\n" +
 	"  on read but `degC` is the canonical write unit.\n"
+
+// ---- Swift catalog generators ---------------------------------------------
+
+// snakeToLowerCamel converts snake_case wire names into lowerCamelCase
+// Swift identifiers. Multi-letter acronyms (SDNN, VO2) end up as
+// title-case (Sdnn, Vo2) which is ugly-but-functional and consistent;
+// the alternative would be a hand-maintained acronym table.
+func snakeToLowerCamel(s string) string {
+	parts := strings.Split(s, "_")
+	if len(parts) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.WriteString(parts[0])
+	for _, p := range parts[1:] {
+		if len(p) == 0 {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String()
+}
+
+// generateSwiftSampleTypeCatalog returns the contents of
+// ios/Sources/HealthBridgeKit/Generated/SampleTypeCatalog.swift. The
+// file declares one static-let constant per catalog wire (plus the
+// non-quantity carryover types) and two arrays — `allKnown` and
+// `allQuantity` — that callers iterate over instead of relying on
+// CaseIterable.
+func generateSwiftSampleTypeCatalog() string {
+	var b strings.Builder
+	b.WriteString(swiftHeader("SampleTypeCatalog.swift"))
+	b.WriteString("import Foundation\n\n")
+	b.WriteString("extension SampleType {\n\n")
+
+	// One static let per catalog quantity type.
+	for _, d := range health.Catalog {
+		fmt.Fprintf(&b, "    public static let %s = SampleType(rawValue: %q)\n", snakeToLowerCamel(string(d.Wire)), string(d.Wire))
+	}
+	b.WriteString("\n    // Non-quantity carryover (HKCategoryType + HKWorkoutType).\n")
+	fmt.Fprintf(&b, "    public static let sleepAnalysis = SampleType(rawValue: %q)\n", string(health.SleepAnalysis))
+	fmt.Fprintf(&b, "    public static let workout = SampleType(rawValue: %q)\n", string(health.Workout))
+
+	// allQuantity: catalog quantity types only, in catalog order.
+	b.WriteString("\n    /// Every HKQuantityTypeIdentifier-backed sample type the\n")
+	b.WriteString("    /// catalog ships, in catalog order. Use this when you only\n")
+	b.WriteString("    /// want quantity types (e.g. iterating to build the\n")
+	b.WriteString("    /// HKQuantityType-only authorization set).\n")
+	b.WriteString("    public static let allQuantity: [SampleType] = [\n")
+	for _, d := range health.Catalog {
+		fmt.Fprintf(&b, "        .%s,\n", snakeToLowerCamel(string(d.Wire)))
+	}
+	b.WriteString("    ]\n")
+
+	// allKnown: catalog quantity types + sleepAnalysis + workout.
+	b.WriteString("\n    /// Every supported sample type — `allQuantity` plus the\n")
+	b.WriteString("    /// non-quantity carryover (sleep_analysis, workout).\n")
+	b.WriteString("    public static let allKnown: [SampleType] = allQuantity + [\n")
+	b.WriteString("        .sleepAnalysis,\n")
+	b.WriteString("        .workout,\n")
+	b.WriteString("    ]\n")
+
+	b.WriteString("}\n")
+	return b.String()
+}
+
+// generateSwiftHealthKitCatalog returns the contents of
+// ios/HealthBridgeApp/Generated/HealthKitCatalog.swift. This file
+// lives in the iOS app target (not the kit) so it can `import
+// HealthKit`. It exposes three static dictionaries that
+// HealthKitMapping looks up by SampleType.rawValue.
+func generateSwiftHealthKitCatalog() string {
+	var b strings.Builder
+	b.WriteString(swiftHeader("HealthKitCatalog.swift"))
+	b.WriteString("#if os(iOS)\n")
+	b.WriteString("import HealthKit\n")
+	b.WriteString("import HealthBridgeKit\n\n")
+	b.WriteString("extension HealthKitMapping {\n\n")
+
+	// quantityIdentifierByWire
+	b.WriteString("    /// Wire-format SampleType.rawValue → HKQuantityTypeIdentifier.\n")
+	b.WriteString("    /// Generated from cli/internal/health/catalog.go.\n")
+	b.WriteString("    static let generatedQuantityIdentifiers: [String: HKQuantityTypeIdentifier] = [\n")
+	for _, d := range health.Catalog {
+		fmt.Fprintf(&b, "        %q: .%s,\n", string(d.Wire), d.HKIdentifier)
+	}
+	b.WriteString("    ]\n\n")
+
+	// canonicalUnitByWire
+	b.WriteString("    /// Wire-format SampleType.rawValue → canonical unit string.\n")
+	b.WriteString("    /// Mirrors canonicalUnitForType in cli/cmd/healthbridge/cmd/types.go.\n")
+	b.WriteString("    static let generatedCanonicalUnits: [String: String] = [\n")
+	for _, d := range health.Catalog {
+		fmt.Fprintf(&b, "        %q: %q,\n", string(d.Wire), d.Unit)
+	}
+	b.WriteString("    ]\n\n")
+
+	// writableSampleTypes (set of wire names)
+	b.WriteString("    /// Wire names the iOS app requests HealthKit write\n")
+	b.WriteString("    /// authorization for at pairing time. Read scopes are\n")
+	b.WriteString("    /// requested for every catalog entry plus sleep_analysis\n")
+	b.WriteString("    /// and workout regardless.\n")
+	b.WriteString("    static let generatedWritableSampleTypes: Set<String> = [\n")
+	// Sort writable wires for deterministic output (Set literal in Swift
+	// is order-insensitive but we want stable file diffs).
+	var writable []string
+	for _, d := range health.Catalog {
+		if d.Writable {
+			writable = append(writable, string(d.Wire))
+		}
+	}
+	sort.Strings(writable)
+	for _, w := range writable {
+		fmt.Fprintf(&b, "        %q,\n", w)
+	}
+	b.WriteString("    ]\n")
+
+	b.WriteString("}\n")
+	b.WriteString("#endif\n")
+	return b.String()
+}
+
+func swiftHeader(filename string) string {
+	return "// GENERATED FILE — DO NOT EDIT.\n" +
+		"//\n" +
+		"// " + filename + " is regenerated by `cd cli && go run ./cmd/gen-types`\n" +
+		"// from cli/internal/health/catalog.go. Hand-edits will be clobbered\n" +
+		"// the next time the generator runs.\n" +
+		"\n"
+}

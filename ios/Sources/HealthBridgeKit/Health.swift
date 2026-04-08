@@ -4,33 +4,32 @@
 
 import Foundation
 
-/// Stable enum naming a HealthKit sample type. The iOS app maps these to
-/// HKQuantityTypeIdentifier strings; over the wire we use this enum.
-public enum SampleType: String, Codable, CaseIterable, Sendable {
-    case stepCount = "step_count"
-    case activeEnergyBurned = "active_energy_burned"
-    case basalEnergyBurned = "basal_energy_burned"
-    case heartRate = "heart_rate"
-    case heartRateResting = "heart_rate_resting"
-    case bodyMass = "body_mass"
-    case bodyMassIndex = "body_mass_index"
-    case bodyFatPercentage = "body_fat_percentage"
-    case leanBodyMass = "lean_body_mass"
-    case height
-    case bloodGlucose = "blood_glucose"
-    case dietaryEnergyConsumed = "dietary_energy_consumed"
-    case dietaryProtein = "dietary_protein"
-    case dietaryCarbohydrates = "dietary_carbohydrates"
-    case dietaryFatTotal = "dietary_fat_total"
-    case dietaryFatSaturated = "dietary_fat_saturated"
-    case dietaryFiber = "dietary_fiber"
-    case dietarySugar = "dietary_sugar"
-    case dietaryCholesterol = "dietary_cholesterol"
-    case dietarySodium = "dietary_sodium"
-    case dietaryCaffeine = "dietary_caffeine"
-    case dietaryWater = "dietary_water"
-    case sleepAnalysis = "sleep_analysis"
-    case workout = "workout"
+/// Stable identifier for a HealthKit sample type. Backed by a wire
+/// string (e.g. "step_count") that the Go CLI emits and the iOS app
+/// maps to an HKQuantityTypeIdentifier (or HKCategoryType /
+/// HKWorkoutType for the non-quantity carryover).
+///
+/// Conceptually this is an enum with ~120 cases; structurally it is a
+/// `RawRepresentable` struct so the catalog can grow without each new
+/// HKQuantityTypeIdentifier requiring an enum case here. The
+/// individual constants (`SampleType.stepCount`, …) live in
+/// `Generated/SampleTypeCatalog.swift` and are regenerated from the
+/// Go-side catalog by `cli/cmd/gen-types`.
+public struct SampleType: RawRepresentable, Hashable, Sendable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+}
+
+extension SampleType: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.rawValue = try container.decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public enum JobKind: String, Codable, Sendable {

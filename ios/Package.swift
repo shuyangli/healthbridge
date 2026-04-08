@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 //
 // HealthBridgeKit is the testable, HealthKit-free heart of the iOS app:
 // the relay client, the job/result codecs, and the data model. It builds on
@@ -13,7 +13,13 @@ import PackageDescription
 let package = Package(
     name: "HealthBridgeKit",
     platforms: [
-        .iOS(.v17),
+        // iOS 18 because the catalog (Sources/HealthBridgeKit/Generated/
+        // SampleTypeCatalog.swift) references HKQuantityTypeIdentifiers
+        // that ship in iOS 18 (running/cycling/rowing/swimming distances
+        // for new modalities, workoutEffortScore, etc.). Older targets
+        // would need @available annotations on every iOS-18-gated
+        // catalog entry.
+        .iOS(.v18),
         .macOS(.v13),
     ],
     products: [

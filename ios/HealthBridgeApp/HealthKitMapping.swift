@@ -34,59 +34,23 @@ enum HealthKitMapping {
     }
 
     static func quantityIdentifier(for sampleType: SampleType) -> HKQuantityTypeIdentifier? {
-        switch sampleType {
-        case .stepCount:             return .stepCount
-        case .activeEnergyBurned:    return .activeEnergyBurned
-        case .basalEnergyBurned:     return .basalEnergyBurned
-        case .heartRate:             return .heartRate
-        case .heartRateResting:      return .restingHeartRate
-        case .bodyMass:              return .bodyMass
-        case .bodyMassIndex:         return .bodyMassIndex
-        case .bodyFatPercentage:     return .bodyFatPercentage
-        case .leanBodyMass:          return .leanBodyMass
-        case .height:                return .height
-        case .bloodGlucose:          return .bloodGlucose
-        case .dietaryEnergyConsumed: return .dietaryEnergyConsumed
-        case .dietaryProtein:        return .dietaryProtein
-        case .dietaryCarbohydrates:  return .dietaryCarbohydrates
-        case .dietaryFatTotal:       return .dietaryFatTotal
-        case .dietaryFatSaturated:   return .dietaryFatSaturated
-        case .dietaryFiber:          return .dietaryFiber
-        case .dietarySugar:          return .dietarySugar
-        case .dietaryCholesterol:    return .dietaryCholesterol
-        case .dietarySodium:         return .dietarySodium
-        case .dietaryCaffeine:       return .dietaryCaffeine
-        case .dietaryWater:          return .dietaryWater
-        case .sleepAnalysis, .workout: return nil
-        }
+        // sleep_analysis and workout intentionally have no entry in
+        // the generated map — they are not HKQuantityType.
+        return generatedQuantityIdentifiers[sampleType.rawValue]
     }
 
-    /// The canonical unit string for a given sample type. This must stay
-    /// in sync with cli/cmd/healthbridge/cmd/types.go's
-    /// `canonicalUnitForType` so that read responses round-trip cleanly
-    /// through the wire format.
+    /// The canonical unit string for a given sample type. For every
+    /// HKQuantityTypeIdentifier-backed type this comes from the
+    /// generated table, which mirrors the Go-side
+    /// `canonicalUnitForType` byte-for-byte. The non-quantity carryover
+    /// (sleep_analysis, workout) is reported as a duration in seconds,
+    /// with the categorical / activity-type info travelling in
+    /// Sample.metadata.
     static func canonicalUnit(for sampleType: SampleType) -> String {
-        switch sampleType {
-        case .stepCount:                                       return "count"
-        case .activeEnergyBurned, .basalEnergyBurned, .dietaryEnergyConsumed:
-            return "kcal"
-        case .heartRate, .heartRateResting:                    return "count/min"
-        case .bodyMass, .leanBodyMass:                         return "kg"
-        case .bodyMassIndex:                                   return "count"
-        case .bodyFatPercentage:                               return "%"
-        case .height:                                          return "m"
-        case .bloodGlucose:                                    return "mg/dL"
-        case .dietaryProtein, .dietaryCarbohydrates,
-             .dietaryFatTotal, .dietaryFatSaturated,
-             .dietaryFiber, .dietarySugar:                     return "g"
-        case .dietaryCholesterol, .dietarySodium, .dietaryCaffeine:
-            return "mg"
-        case .dietaryWater:                                    return "mL"
-        // sleep_analysis and workout are reported as durations in
-        // seconds; the categorical / activity-type info travels in
-        // Sample.metadata.
-        case .sleepAnalysis, .workout:                         return "s"
+        if let u = generatedCanonicalUnits[sampleType.rawValue] {
+            return u
         }
+        return "s"
     }
 
     /// Map an `HKCategoryValueSleepAnalysis` raw value to the stable
@@ -133,39 +97,53 @@ enum HealthKitMapping {
         }
     }
 
-    /// Map a CLI-side unit string into an HKUnit. The CLI is supposed to
-    /// send the canonical unit per `healthbridge types`, but we accept a
-    /// few common aliases.
+    /// Map a CLI-side unit string into an HKUnit.
+    ///
+    /// HealthKit's `HKUnit(from:)` already understands the catalog's
+    /// canonical strings — `mg/dL`, `mmHg`, `degC`, `dBASPL`,
+    /// `ml/(kg*min)`, `kcal/(kg*hr)`, and so on. We override the parser
+    /// in two narrow cases:
+    ///
+    ///   1. CLI-side loose aliases that HealthKit would reject because
+    ///      they're case-mangled (`mg/dl`, `ml`, `mmol/l`) or
+    ///      non-standard names (`fl_oz_us`, `cal`, `kj`, `lb`, `in`).
+    ///   2. `%` and `count` / `count/min`, which we route through the
+    ///      typed convenience constructors so the resulting HKUnit
+    ///      compares equal to whatever HealthKit returns from its own
+    ///      type-specific accessors.
     static func unit(from string: String) -> HKUnit {
+        switch string {
+        case "%":         return .percent()
+        case "count":     return .count()
+        case "count/min": return HKUnit.count().unitDivided(by: .minute())
+        default: break
+        }
         switch string.lowercased() {
-        case "count":      return .count()
-        case "count/min":  return HKUnit.count().unitDivided(by: .minute())
-        case "kcal":       return .kilocalorie()
-        case "cal":        return .smallCalorie()
-        case "kj":         return .jouleUnit(with: .kilo)
-        case "g":          return .gram()
-        case "mg":         return .gramUnit(with: .milli)
-        case "kg":         return .gramUnit(with: .kilo)
-        case "lb":         return .pound()
-        case "ml":         return .literUnit(with: .milli)
-        case "l":          return .liter()
-        case "fl_oz_us":   return .fluidOunceUS()
-        case "mg/dl":      return HKUnit(from: "mg/dL")
-        case "mmol/l":     return HKUnit(from: "mmol/L")
-        case "%":          return .percent()
-        case "m":          return .meter()
-        case "cm":         return .meterUnit(with: .centi)
-        case "in":         return .inch()
-        default:           return HKUnit(from: string) // last-ditch parse
+        case "cal":      return .smallCalorie()
+        case "kj":       return .jouleUnit(with: .kilo)
+        case "lb":       return .pound()
+        case "ml":       return .literUnit(with: .milli)
+        case "fl_oz_us": return .fluidOunceUS()
+        case "in":       return .inch()
+        case "mg/dl":    return HKUnit(from: "mg/dL")
+        case "mmol/l":   return HKUnit(from: "mmol/L")
+        default:
+            // Trust HealthKit's parser for everything else. This
+            // covers every catalog canonical unit (kcal, kg, g, mg,
+            // mcg, mL, L, L/min, m, cm, m/s, min, ms, mmHg, degC,
+            // degF, dBASPL, W, S, IU, ml/(kg*min), kcal/(kg*hr), …).
+            return HKUnit(from: string)
         }
     }
 
     /// Read scopes the app requests at pairing time. Includes the
     /// sleep_analysis category type and the workout type in addition
-    /// to all quantity types.
+    /// to every HKQuantityTypeIdentifier in the catalog. This is the
+    /// "agent can read anything Apple ships" surface — the cost is a
+    /// long HealthKit auth sheet.
     static func readScopes() -> Set<HKObjectType> {
         var out: Set<HKObjectType> = []
-        for s in SampleType.allCases {
+        for s in SampleType.allKnown {
             if let t = sampleObjectType(for: s) {
                 out.insert(t)
             }
@@ -173,32 +151,15 @@ enum HealthKitMapping {
         return out
     }
 
-    /// Write scopes the app requests at pairing time. We deliberately
-    /// request write for the "agent-friendly" categories — calories
-    /// (in/out) and the dietary macros + water — so the agent can log
-    /// meals and exercise on the user's behalf without re-prompting.
+    /// Write scopes the app requests at pairing time. The set of
+    /// writable types is generated from the catalog's `Writable`
+    /// flags so that picking up the next vitamin is one Go-side
+    /// catalog edit, not a Swift hand-edit. Sensors and clinical
+    /// data stay read-only.
     static func writeScopes() -> Set<HKSampleType> {
-        let writable: [SampleType] = [
-            .activeEnergyBurned,
-            .dietaryEnergyConsumed,
-            .dietaryProtein,
-            .dietaryCarbohydrates,
-            .dietaryFatTotal,
-            .dietaryFatSaturated,
-            .dietaryFiber,
-            .dietarySugar,
-            .dietaryCholesterol,
-            .dietarySodium,
-            .dietaryCaffeine,
-            .dietaryWater,
-            .bodyMass,
-            .bodyFatPercentage,
-            .leanBodyMass,
-            .height,
-        ]
         var out: Set<HKSampleType> = []
-        for s in writable {
-            if let q = quantityType(for: s) {
+        for raw in generatedWritableSampleTypes {
+            if let q = quantityType(for: SampleType(rawValue: raw)) {
                 out.insert(q)
             }
         }
