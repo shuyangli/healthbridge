@@ -8,14 +8,40 @@ waits for the iOS app to drain it.
 
 ### Homebrew (recommended on macOS)
 
+The CLI is published through the
+[`shuyangli/tap`](https://github.com/shuyangli/homebrew-tap)
+Homebrew tap. Tap it once and install:
+
 ```sh
-brew install shuyangli/tap/healthbridge
-healthbridge --version
+brew tap shuyangli/tap
+brew install healthbridge
 ```
 
-Updates flow through `brew upgrade healthbridge`. Homebrew strips the
-macOS quarantine attribute on install, so Gatekeeper won't second-guess
-the binary the way it does for a manually-downloaded tarball.
+Or in one shot, which auto-taps as a side effect:
+
+```sh
+brew install shuyangli/tap/healthbridge
+```
+
+Confirm:
+
+```sh
+healthbridge --version
+# healthbridge 0.0.3 (<sha>, <date>) darwin/arm64
+```
+
+Future releases come down via:
+
+```sh
+brew upgrade healthbridge
+```
+
+The CLI is shipped as a Homebrew **cask**, not a formula, because it's
+a prebuilt binary. Casks normally quarantine downloaded binaries by
+default, which would make Gatekeeper kill the CLI on first launch
+(we're not Apple Developer ID-signed). The cask's `postflight` block
+clears the quarantine xattr automatically on install, so the binary
+just runs — no `xattr` dance needed.
 
 ### Prebuilt tarball from GitHub Releases
 
@@ -24,7 +50,7 @@ matching tarball from
 [the Releases page](https://github.com/shuyangli/healthbridge/releases):
 
 ```sh
-VERSION=0.0.1
+VERSION=0.0.3
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 curl -L "https://github.com/shuyangli/healthbridge/releases/download/v${VERSION}/healthbridge_${VERSION}_${OS}_${ARCH}.tar.gz" \
@@ -39,7 +65,7 @@ On macOS, if you downloaded the tarball through a browser instead of
 xattr -d com.apple.quarantine /usr/local/bin/healthbridge
 ```
 
-(Homebrew users don't have to do this.)
+(Homebrew users don't have to do this — the cask postflight handles it.)
 
 ### From source via `go install`
 

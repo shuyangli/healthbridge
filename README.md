@@ -24,12 +24,22 @@ skill/healthbridge/  Agent skill package wrapping the CLI
 
 ## Install the CLI
 
+On macOS, install via the [`shuyangli/tap`](https://github.com/shuyangli/homebrew-tap)
+Homebrew tap:
+
 ```sh
+brew tap shuyangli/tap
+brew install healthbridge
+
+# or, in one shot:
 brew install shuyangli/tap/healthbridge
 
+healthbridge --version
 healthbridge pair --relay https://healthbridge.shuyang-li.workers.dev
 # scan the QR with the HealthBridge iOS app
 ```
+
+`brew upgrade healthbridge` picks up future releases.
 
 Linux users and anyone who wants a tarball can grab one from
 [GitHub Releases](https://github.com/shuyangli/healthbridge/releases).
