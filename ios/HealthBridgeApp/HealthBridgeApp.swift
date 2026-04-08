@@ -439,6 +439,22 @@ final class AppCoordinator: ObservableObject {
             )
         }
         let unit = HealthKitMapping.unit(from: HealthKitMapping.canonicalUnit(for: payload.type))
+        // HKQuantity.doubleValue(for:) raises an Objective-C
+        // NSException (NOT a Swift error) when the unit is
+        // incompatible with the type — and ObjC exceptions abort the
+        // process under Swift's exception model. We pre-flight the
+        // compatibility check here so a wrong catalog unit becomes a
+        // structured Swift error → failed JobResult → cursor advance,
+        // instead of crashing the entire HealthBridge app on the next
+        // drain pass.
+        guard qType.is(compatibleWith: unit) else {
+            throw NSError(
+                domain: "HealthBridge",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "catalog unit '\(HealthKitMapping.canonicalUnit(for: payload.type))' is not compatible with HKQuantityType \(qType.identifier) — please file an issue"]
+            )
+        }
         let predicate = HKQuery.predicateForSamples(withStart: payload.from, end: payload.to)
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[Sample], Error>) in

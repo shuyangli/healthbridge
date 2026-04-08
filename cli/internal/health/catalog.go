@@ -135,8 +135,11 @@ var Catalog = []Definition{
 	{Wire: PaddleSportsSpeed, HKIdentifier: "paddleSportsSpeed", Category: CategoryActivity, Unit: "m/s", Aggregation: Discrete},
 	{Wire: RowingSpeed, HKIdentifier: "rowingSpeed", Category: CategoryActivity, Unit: "m/s", Aggregation: Discrete},
 	{Wire: PhysicalEffort, HKIdentifier: "physicalEffort", Category: CategoryActivity, Unit: "kcal/(kg*hr)", Aggregation: Discrete},
-	{Wire: WorkoutEffortScore, HKIdentifier: "workoutEffortScore", Category: CategoryActivity, Unit: "count", Aggregation: Discrete},
-	{Wire: EstimatedWorkoutEffortScore, HKIdentifier: "estimatedWorkoutEffortScore", Category: CategoryActivity, Unit: "count", Aggregation: Discrete},
+	// Effort scores use HKUnit.appleEffortScore() (custom unit added in
+	// iOS 18). The HKUnit string `appleEffortScore` is recognised by
+	// the iOS-side parser via an explicit case in HealthKitMapping.unit(from:).
+	{Wire: WorkoutEffortScore, HKIdentifier: "workoutEffortScore", Category: CategoryActivity, Unit: "appleEffortScore", Aggregation: Discrete},
+	{Wire: EstimatedWorkoutEffortScore, HKIdentifier: "estimatedWorkoutEffortScore", Category: CategoryActivity, Unit: "appleEffortScore", Aggregation: Discrete},
 
 	// ----- Body measurements (7) -----
 	{Wire: Height, HKIdentifier: "height", Category: CategoryBodyMeasurement, Unit: "m", Aggregation: Discrete, Writable: true},

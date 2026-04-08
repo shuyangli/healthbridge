@@ -37,7 +37,7 @@ new samples for it. Read access is requested for every type below.
 | `distance_swimming` | `m` |  |
 | `distance_walking_running` | `m` |  |
 | `distance_wheelchair` | `m` |  |
-| `estimated_workout_effort_score` | `count` |  |
+| `estimated_workout_effort_score` | `appleEffortScore` |  |
 | `flights_climbed` | `count` |  |
 | `paddle_sports_speed` | `m/s` |  |
 | `physical_effort` | `kcal/(kg*hr)` |  |
@@ -51,7 +51,7 @@ new samples for it. Read access is requested for every type below.
 | `step_count` | `count` |  |
 | `swimming_stroke_count` | `count` |  |
 | `vo2_max` | `ml/(kg*min)` |  |
-| `workout_effort_score` | `count` |  |
+| `workout_effort_score` | `appleEffortScore` |  |
 
 ## Body measurements (7)
 

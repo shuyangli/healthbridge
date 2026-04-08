@@ -113,9 +113,10 @@ enum HealthKitMapping {
     ///      type-specific accessors.
     static func unit(from string: String) -> HKUnit {
         switch string {
-        case "%":         return .percent()
-        case "count":     return .count()
-        case "count/min": return HKUnit.count().unitDivided(by: .minute())
+        case "%":                return .percent()
+        case "count":            return .count()
+        case "count/min":        return HKUnit.count().unitDivided(by: .minute())
+        case "appleEffortScore": return .appleEffortScore()
         default: break
         }
         switch string.lowercased() {
