@@ -6,58 +6,61 @@ waits for the iOS app to drain it.
 
 ## Install
 
-### From source via `go install` (recommended)
+### Homebrew (recommended on macOS)
+
+```sh
+brew install shuyangli/tap/healthbridge
+healthbridge --version
+```
+
+Updates flow through `brew upgrade healthbridge`. Homebrew strips the
+macOS quarantine attribute on install, so Gatekeeper won't second-guess
+the binary the way it does for a manually-downloaded tarball.
+
+### Prebuilt tarball from GitHub Releases
+
+For Linux, or for macOS users who don't want Homebrew, grab the
+matching tarball from
+[the Releases page](https://github.com/shuyangli/healthbridge/releases):
+
+```sh
+VERSION=0.0.1
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -L "https://github.com/shuyangli/healthbridge/releases/download/v${VERSION}/healthbridge_${VERSION}_${OS}_${ARCH}.tar.gz" \
+  | tar -xz
+sudo install ./healthbridge /usr/local/bin/healthbridge
+```
+
+On macOS, if you downloaded the tarball through a browser instead of
+`curl`, Gatekeeper will quarantine it. Clear the attribute once:
+
+```sh
+xattr -d com.apple.quarantine /usr/local/bin/healthbridge
+```
+
+(Homebrew users don't have to do this.)
+
+### From source via `go install`
 
 Requires Go 1.26 or newer.
 
 ```sh
 go install github.com/shuyangli/healthbridge/cli/cmd/healthbridge@latest
+export PATH="$HOME/go/bin:$PATH"
 ```
 
-This puts the binary at `$(go env GOPATH)/bin/healthbridge` (typically
-`~/go/bin/healthbridge`). Make sure that directory is on your `PATH`:
+`@latest` tracks the most recent tagged release; `@main` builds from
+the current `main` branch tip.
 
-```sh
-echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc
-exec zsh
-```
-
-Confirm:
-
-```sh
-healthbridge --help
-```
-
-### From a local checkout
-
-If you have this repo cloned and want to install the working tree:
+### From a local checkout (development)
 
 ```sh
 cd cli
 go install ./cmd/healthbridge
-```
-
-Same install location as above.
-
-### Pinning a specific version
-
-```sh
-go install github.com/shuyangli/healthbridge/cli/cmd/healthbridge@v0.1.0
-```
-
-Replace the tag with whatever version you want. `@latest` always grabs
-the latest tagged release; `@main` grabs the current `main` branch tip.
-
-### Building without installing
-
-```sh
-cd cli
+# or, without clobbering your installed copy:
 go build -o ./bin/healthbridge ./cmd/healthbridge
-./bin/healthbridge --help
 ```
-
-Useful during development when you don't want to clobber your installed
-copy.
 
 ## Configure
 
@@ -105,6 +108,7 @@ healthbridge scopes  list|grant|revoke
 healthbridge types
 healthbridge pair
 healthbridge wipe    [--yes]
+healthbridge version [--json]
 ```
 
 `healthbridge <command> --help` for full flag listings, or see the

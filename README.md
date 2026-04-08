@@ -24,15 +24,17 @@ skill/healthbridge/  Agent skill package wrapping the CLI
 
 ## Install the CLI
 
-Requires Go 1.26+.
-
 ```sh
-go install github.com/shuyangli/healthbridge/cli/cmd/healthbridge@latest
-export PATH="$HOME/go/bin:$PATH"
+brew install shuyangli/tap/healthbridge
 
 healthbridge pair --relay https://healthbridge.shuyang-li.workers.dev
 # scan the QR with the HealthBridge iOS app
 ```
+
+Linux users and anyone who wants a tarball can grab one from
+[GitHub Releases](https://github.com/shuyangli/healthbridge/releases).
+Go developers can still `go install
+github.com/shuyangli/healthbridge/cli/cmd/healthbridge@latest`.
 
 See [`cli/README.md`](cli/README.md) for the full install, configure,
 and first-run walkthrough.
