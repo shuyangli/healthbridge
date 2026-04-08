@@ -6,6 +6,7 @@ import {
   DEFAULT_JOB_TTL_MS,
   MAX_JOBS_PER_MAILBOX,
   MAX_BLOB_BYTES,
+  AUTO_EPHEMERAL_THRESHOLD,
 } from "./mailbox.js";
 
 // Synthetic clock + waker so the tests are deterministic and never hit a
@@ -351,5 +352,96 @@ describe("Mailbox.deleteResultsFor", () => {
   it("returns false when no results match", () => {
     const mb = new Mailbox(fakeDeps(0));
     expect(mb.deleteResultsFor("ghost")).toBe(false);
+  });
+});
+
+describe("Mailbox.postResult persistent flag", () => {
+  it("defaults to persistent=true when not passed", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    const r = mb.postResult("a", 0, "small");
+    expect(r.persistent).toBe(true);
+  });
+
+  it("respects an explicit persistent=false", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    const r = mb.postResult("a", 0, "ephemeral", false);
+    expect(r.persistent).toBe(false);
+  });
+
+  it("auto-downgrades to ephemeral when blob exceeds AUTO_EPHEMERAL_THRESHOLD even if persistent=true", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    const big = "x".repeat(AUTO_EPHEMERAL_THRESHOLD + 1);
+    const r = mb.postResult("big", 0, big, true);
+    expect(r.persistent).toBe(false);
+  });
+
+  it("keeps persistent=true for blobs at exactly the threshold", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    const just = "x".repeat(AUTO_EPHEMERAL_THRESHOLD);
+    const r = mb.postResult("ok", 0, just, true);
+    expect(r.persistent).toBe(true);
+  });
+});
+
+describe("Mailbox.snapshot persistence filter", () => {
+  it("drops ephemeral results entirely from the snapshot", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.postResult("write-1", 0, "uuid-1", true);
+    mb.postResult("read-1", 0, "huge", false);
+    mb.postResult("write-2", 0, "uuid-2", true);
+
+    const snap = mb.snapshot();
+    expect(snap.results).toHaveLength(2);
+    expect(snap.results.map((r) => r.jobId).sort()).toEqual(["write-1", "write-2"]);
+    // Persistent ones keep their blob.
+    for (const r of snap.results) {
+      expect(r.blob).not.toBe("");
+      expect(r.persistent).toBe(true);
+    }
+  });
+
+  it("inMemorySnapshot still returns ephemeral results for tests", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.postResult("read-1", 0, "huge", false);
+    const inMem = mb.inMemorySnapshot();
+    expect(inMem.results).toHaveLength(1);
+    expect(inMem.results[0].persistent).toBe(false);
+    expect(inMem.results[0].blob).toBe("huge");
+  });
+
+  it("restoring a snapshot then snapshotting again is stable", () => {
+    const a = new Mailbox(fakeDeps(0));
+    a.enqueueJob("j1", "blob-j1");
+    a.postResult("j1", 0, "uuid", true);
+    a.postResult("ephemeral-job", 0, "data", false);
+    const snap = a.snapshot();
+    expect(snap.results).toHaveLength(1);
+
+    const b = new Mailbox(fakeDeps(2000));
+    b.restore(snap);
+    expect(b.stats().pendingResults).toBe(1);
+    // Re-snapshotting drops nothing further.
+    expect(b.snapshot().results).toHaveLength(1);
+  });
+
+  it("legacy snapshot without persistent field is restored as durable", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    // Simulate a v2-format snapshot: result with no `persistent` field.
+    mb.restore({
+      jobs: [],
+      results: [
+        {
+          jobId: "old",
+          pageIndex: 0,
+          blob: "blob",
+          postedAt: 0,
+          expiresAt: 1_000_000,
+        } as any,
+      ],
+      nextSeq: 1,
+    });
+    const snap = mb.snapshot();
+    expect(snap.results).toHaveLength(1);
+    expect(snap.results[0].persistent).toBe(true);
   });
 });

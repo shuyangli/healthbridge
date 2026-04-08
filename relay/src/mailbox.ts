@@ -49,14 +49,42 @@ export interface StoredJob {
   expiresAt: number;
 }
 
-/** Stored result page; multiple pages may share a jobId. */
+/**
+ * Stored result page; multiple pages may share a jobId.
+ *
+ * `persistent` controls whether the result survives a Durable Object
+ * eviction. The mailbox always holds it in memory, but only persistent
+ * results are written into the snapshot the DO flushes to storage.
+ *
+ *   - persistent=true  → write/profile results. Tiny blobs (a HealthKit
+ *     UUID, a typed enum value). The CLI may legitimately come back
+ *     after a delay to retrieve them, so we want them to survive an
+ *     eviction. The CLI is expected to call `DELETE /v1/results` after
+ *     successfully decoding so they're pruned promptly.
+ *
+ *   - persistent=false → read/sync results. Blobs can be large; the
+ *     CLI is normally still long-polling at the other end (synchronous
+ *     flow). We keep the blob in memory for as long as the DO instance
+ *     is warm but never write it to storage. After eviction the result
+ *     is simply gone — the CLI's pollResults sees no entries, the
+ *     long-poll times out as `pending`, and the user re-runs the read.
+ */
 export interface StoredResult {
   jobId: string;
   pageIndex: number;
   blob: string;
   postedAt: number;
   expiresAt: number;
+  persistent: boolean;
 }
+
+/** Auto-ephemeralize any blob larger than this regardless of the
+ *  persistent flag. Belt-and-braces against future code paths that
+ *  forget to set the flag, and against old iOS clients that don't
+ *  know about it yet. 64 KiB easily covers a HealthKit UUID + JSON
+ *  envelope and a typed profile value, but rejects anything that
+ *  could plausibly accumulate into a snapshot-too-big crash. */
+export const AUTO_EPHEMERAL_THRESHOLD = 64 * 1024;
 
 /** Outcome of a long-poll for jobs. */
 export interface JobsPollResult {
@@ -118,7 +146,17 @@ export class Mailbox {
 
   constructor(private deps: MailboxDeps = realDeps) {}
 
-  /** For tests / persistence. */
+  /**
+   * Returns the persistable view of the mailbox state. NON-persistent
+   * results are dropped entirely (the snapshot only contains
+   * persistent ones); non-persistent ones live exclusively in memory
+   * and vanish on a Durable Object eviction. This is what the DO
+   * writes to storage on every mutation.
+   *
+   * Use `inMemorySnapshot()` for tests that need the full state
+   * including the ephemeral entries the persistence path intentionally
+   * drops.
+   */
   snapshot(): {
     jobs: StoredJob[];
     results: StoredResult[];
@@ -127,13 +165,26 @@ export class Mailbox {
   } {
     return {
       jobs: structuredClone(this.jobs),
+      results: structuredClone(this.results.filter((r) => r.persistent)),
+      nextSeq: this.nextSeq,
+      pair: structuredClone(this.pair),
+    };
+  }
+
+  /** Full in-memory snapshot, ephemeral results included. Tests use
+   *  this to assert on data that snapshot() intentionally drops. */
+  inMemorySnapshot() {
+    return {
+      jobs: structuredClone(this.jobs),
       results: structuredClone(this.results),
       nextSeq: this.nextSeq,
       pair: structuredClone(this.pair),
     };
   }
 
-  /** For tests / persistence — restore from a previous snapshot. */
+  /** For tests / persistence — restore from a previous snapshot.
+   *  Pre-v3 snapshots don't carry `persistent` on results; default
+   *  to true so legacy data is treated as durable. */
   restore(snap: {
     jobs: StoredJob[];
     results: StoredResult[];
@@ -141,7 +192,10 @@ export class Mailbox {
     pair?: PairState;
   }) {
     this.jobs = structuredClone(snap.jobs);
-    this.results = structuredClone(snap.results);
+    this.results = snap.results.map((r) => ({
+      ...structuredClone(r),
+      persistent: (r as StoredResult).persistent ?? true,
+    }));
     this.nextSeq = snap.nextSeq;
     this.pair = snap.pair ? structuredClone(snap.pair) : {};
   }
@@ -276,13 +330,34 @@ export class Mailbox {
   }
 
   /**
-   * Append a result page for a previously-enqueued job. Wakes any waiters
-   * for that jobId.
+   * Append a result page for a previously-enqueued job. Wakes any
+   * waiters for that jobId.
+   *
+   * `persistent` decides whether the result will be written into the
+   * Durable Object snapshot:
+   *
+   *   - `true`  → small, durable. Used by write/profile results. Survives
+   *               a DO eviction. Auto-downgraded to false (with a console
+   *               warning) if the blob exceeds AUTO_EPHEMERAL_THRESHOLD,
+   *               so an old client that always passes true can never
+   *               crash the snapshot.
+   *
+   *   - `false` → in-memory only. Used by read/sync results. The blob
+   *               lives in this.results until either the CLI polls and
+   *               acks via DELETE /v1/results, the DO is evicted (in
+   *               which case the result is gone and the CLI should
+   *               re-issue), or the TTL eviction sweeps it.
+   *
+   * The default is `true` so that callers (or the over-the-wire body)
+   * that don't pass the field continue to get the durable behaviour;
+   * the iOS drain loop opts INTO ephemeral by passing false for read
+   * paths.
    */
   postResult(
     jobId: string,
     pageIndex: number,
     blob: string,
+    persistent: boolean = true,
     ttlMs = DEFAULT_RESULT_TTL_MS,
   ): StoredResult {
     if (typeof jobId !== "string" || jobId.length === 0) {
@@ -296,6 +371,12 @@ export class Mailbox {
     }
     if (blob.length > MAX_BLOB_BYTES) {
       throw new MailboxError("blob_too_large", `blob exceeds ${MAX_BLOB_BYTES} bytes`, 413);
+    }
+    // Auto-ephemeralize anything large enough to threaten snapshot
+    // size, regardless of what the caller passed. Cheap belt-and-braces.
+    let effectivePersistent = persistent;
+    if (effectivePersistent && blob.length > AUTO_EPHEMERAL_THRESHOLD) {
+      effectivePersistent = false;
     }
     this.evictExpired();
     const existingPages = this.results.filter((r) => r.jobId === jobId).length;
@@ -316,6 +397,7 @@ export class Mailbox {
       blob,
       postedAt: now,
       expiresAt: now + ttlMs,
+      persistent: effectivePersistent,
     };
     this.results.push(stored);
     this.wakeResultWaiters(jobId);

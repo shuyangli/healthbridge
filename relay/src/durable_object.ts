@@ -1,28 +1,31 @@
 // Cloudflare Durable Object wrapper around Mailbox.
 //
-// One DO instance per pair_id; the entry point in index.ts uses the pair
-// query parameter as the DO name. The DO loads the mailbox from persistent
-// storage on first use, processes a request, then persists any changes
-// back to storage.
+// One DO instance per pair_id; the entry point in index.ts uses the
+// pair query parameter as the DO name. The DO loads the mailbox from
+// persistent storage on first use, processes a request, then persists
+// the (small) updated snapshot back to storage.
 //
-// Persistence layout (v2):
+// Persistence layout (v3): one key per pair, `snapshot_v3`, holding a
+// structuredClone-friendly snapshot of:
 //
-//   meta_v2                      → { nextSeq, pair }
-//   job:<padded seq>             → StoredJob (one per pending job)
-//   result:<jobId>:<padded page> → StoredResult (one per result page)
+//   - all pending jobs (small — encrypted job requests)
+//   - the pair state (pubkeys + auth_token)
+//   - PERSISTENT result pages only (writes / profiles — small UUIDs and
+//     enum values that should survive a DO eviction)
+//   - nextSeq
 //
-// One key per record means no single put ever exceeds the per-blob cap
-// of MAX_BLOB_BYTES (1 MiB). Storing the whole snapshot under one key
-// (the v1 layout) was fragile — once the mailbox accumulated a couple
-// of near-cap blobs the combined snapshot exceeded the SQLite-backed
-// DO row size limit and `state.storage.put` started throwing on every
-// mutation. Those throws escaped DO.fetch as Cloudflare error 1101.
+// Read and sync results are EPHEMERAL: they live in Mailbox.results in
+// memory, are never written into the snapshot, and the CLI is expected
+// to ack them via DELETE /v1/results so they're pruned promptly. The
+// snapshot therefore stays small no matter how many reads pass through.
 //
-// On first load we migrate from the v1 `mailbox_snapshot_v1` key if it
-// exists, then drop it on the next successful persist.
+// On first load we migrate from any older layout we recognise — v2's
+// per-record meta_v2 + job:* + result:* keys, and v1's
+// `mailbox_snapshot_v1` single key — then drop the old keys.
 //
-// This file is the only place that imports Workers types. The actual
-// logic lives in mailbox.ts and handler.ts and is exercised by node tests.
+// A 1-hour repeating alarm wakes the DO to evictExpired() and re-snapshot
+// even when no requests are coming in, so a paired-but-quiet device
+// doesn't hold stale data past its TTL.
 
 /* eslint-disable @typescript-eslint/ban-ts-comment */
 // @ts-nocheck — Workers globals are provided by the runtime, not by @types/node.
@@ -30,20 +33,13 @@
 import { Mailbox } from "./mailbox.js";
 import { handleRequest } from "./handler.js";
 
-const LEGACY_SNAPSHOT_KEY = "mailbox_snapshot_v1";
-const META_KEY = "meta_v2";
-const JOB_PREFIX = "job:";
-const RESULT_PREFIX = "result:";
+const SNAPSHOT_KEY = "snapshot_v3";
+const LEGACY_V1_KEY = "mailbox_snapshot_v1";
+const META_V2_KEY = "meta_v2";
+const JOB_V2_PREFIX = "job:";
+const RESULT_V2_PREFIX = "result:";
 
-function jobKey(seq: number): string {
-  // 12 zero-padded digits keep keys lex-sortable so list() returns them
-  // in the same order as the in-memory array.
-  return `${JOB_PREFIX}${seq.toString().padStart(12, "0")}`;
-}
-
-function resultKey(jobId: string, pageIndex: number): string {
-  return `${RESULT_PREFIX}${jobId}:${pageIndex.toString().padStart(6, "0")}`;
-}
+const ALARM_INTERVAL_MS = 60 * 60 * 1000; // hourly TTL sweep
 
 export class PairMailboxDO {
   private mailbox = new Mailbox();
@@ -54,94 +50,117 @@ export class PairMailboxDO {
   private async ensureLoaded() {
     if (this.loaded) return;
     try {
-      // Migration path: if a v1 snapshot key exists from a prior
-      // deploy, restore from it once. The next successful persist
-      // will rewrite the data in v2 layout and clean up the old key.
-      const legacy = await this.state.storage.get(LEGACY_SNAPSHOT_KEY);
+      // Try the current snapshot first.
+      const snap = await this.state.storage.get(SNAPSHOT_KEY);
+      if (snap) {
+        try {
+          this.mailbox.restore(snap);
+        } catch {
+          // Forward-compatible: discard a corrupt snapshot rather than wedging.
+        }
+        this.loaded = true;
+        await this.ensureAlarmScheduled();
+        return;
+      }
+
+      // v2 migration: per-record keys (meta_v2 + job:<seq> + result:<jobId>:<page>).
+      const metaV2 = (await this.state.storage.get(META_V2_KEY)) as
+        | { nextSeq?: number; pair?: any }
+        | undefined;
+      if (metaV2) {
+        const jobMap = await this.state.storage.list({ prefix: JOB_V2_PREFIX });
+        const resultMap = await this.state.storage.list({ prefix: RESULT_V2_PREFIX });
+        const jobs = Array.from(jobMap.values()).sort(
+          (a: any, b: any) => a.seq - b.seq,
+        );
+        const results = Array.from(resultMap.values());
+        this.mailbox.restore({
+          jobs: jobs as any,
+          results: results as any,
+          nextSeq: metaV2.nextSeq ?? 1,
+          pair: metaV2.pair ?? {},
+        });
+        // Persist in v3 format and drop the old keys.
+        await this.persist();
+        for (const k of jobMap.keys()) await this.state.storage.delete(k);
+        for (const k of resultMap.keys()) await this.state.storage.delete(k);
+        await this.state.storage.delete(META_V2_KEY);
+        this.loaded = true;
+        await this.ensureAlarmScheduled();
+        return;
+      }
+
+      // v1 migration: single-key legacy snapshot.
+      const legacy = await this.state.storage.get(LEGACY_V1_KEY);
       if (legacy) {
         try {
           this.mailbox.restore(legacy as any);
         } catch {
-          // Forward-compatible: discard corrupted snapshot rather than wedging.
+          // Forward-compatible: discard corruption.
         }
-        this.loaded = true;
-        return;
+        await this.persist();
+        await this.state.storage.delete(LEGACY_V1_KEY);
       }
-
-      const meta = (await this.state.storage.get(META_KEY)) as
-        | { nextSeq?: number; pair?: any }
-        | undefined;
-      const jobMap = await this.state.storage.list({ prefix: JOB_PREFIX });
-      const resultMap = await this.state.storage.list({ prefix: RESULT_PREFIX });
-
-      const jobs = Array.from(jobMap.values()).sort(
-        (a: any, b: any) => a.seq - b.seq,
-      );
-      const results = Array.from(resultMap.values());
-
-      this.mailbox.restore({
-        jobs: jobs as any,
-        results: results as any,
-        nextSeq: meta?.nextSeq ?? 1,
-        pair: meta?.pair ?? {},
-      });
     } catch (err) {
-      // Loading failure should NOT wedge the DO. Start fresh; the CLI's
-      // local job mirror will re-enqueue anything in flight, and the iOS
-      // app will re-drain on its next pull.
+      // Loading must NEVER wedge the DO. Start fresh; the CLI's local
+      // mirror will re-enqueue anything in flight, and the iOS app will
+      // re-drain.
       console.error("PairMailboxDO: ensureLoaded failed:", err);
     }
     this.loaded = true;
+    await this.ensureAlarmScheduled();
   }
 
   /**
-   * Write the current Mailbox state to per-record storage. Each
-   * StoredJob and each StoredResult lives under its own key, so no
-   * single `put` exceeds MAX_BLOB_BYTES. Anything in storage that is
-   * NOT in the in-memory snapshot is deleted (this is how evictExpired
-   * and revoke() propagate).
+   * Snapshot the in-memory mailbox to a single DO storage key. Only
+   * persistent results are written (the snapshot's filter() drops
+   * ephemeral entries entirely), so this stays small no matter how
+   * many reads have passed through.
    */
   private async persist() {
     const snap = this.mailbox.snapshot();
+    await this.state.storage.put(SNAPSHOT_KEY, snap);
+  }
 
-    const desiredJobKeys = new Set<string>();
-    for (const j of snap.jobs) {
-      const k = jobKey(j.seq);
-      desiredJobKeys.add(k);
-      await this.state.storage.put(k, j);
+  private async ensureAlarmScheduled() {
+    try {
+      const current = await this.state.storage.getAlarm();
+      if (current === null || current === undefined) {
+        await this.state.storage.setAlarm(Date.now() + ALARM_INTERVAL_MS);
+      }
+    } catch (err) {
+      // setAlarm is best-effort; we still evict on every fetch.
+      console.error("PairMailboxDO: setAlarm failed:", err);
     }
+  }
 
-    const desiredResultKeys = new Set<string>();
-    for (const r of snap.results) {
-      const k = resultKey(r.jobId, r.pageIndex);
-      desiredResultKeys.add(k);
-      await this.state.storage.put(k, r);
-    }
-
-    // Garbage-collect any persisted records the in-memory snapshot
-    // doesn't reference. Single-threaded DO execution means there are
-    // no concurrent writes to race against here.
-    const existingJobs = await this.state.storage.list({ prefix: JOB_PREFIX });
-    for (const k of existingJobs.keys()) {
-      if (!desiredJobKeys.has(k)) {
-        await this.state.storage.delete(k);
+  /**
+   * Cloudflare Workers calls this when the alarm fires. We sweep
+   * expired jobs/results and re-arm. The DO instance is only spun up
+   * for the duration of this method, so the in-memory mailbox is
+   * (re)loaded from storage first.
+   */
+  async alarm(): Promise<void> {
+    try {
+      await this.ensureLoaded();
+      const before = this.mailbox.stats();
+      this.mailbox.evictExpired();
+      const after = this.mailbox.stats();
+      if (
+        after.pendingJobs !== before.pendingJobs ||
+        after.pendingResults !== before.pendingResults
+      ) {
+        await this.persist();
+      }
+    } catch (err) {
+      console.error("PairMailboxDO: alarm sweep failed:", err);
+    } finally {
+      try {
+        await this.state.storage.setAlarm(Date.now() + ALARM_INTERVAL_MS);
+      } catch (err) {
+        console.error("PairMailboxDO: alarm reschedule failed:", err);
       }
     }
-    const existingResults = await this.state.storage.list({ prefix: RESULT_PREFIX });
-    for (const k of existingResults.keys()) {
-      if (!desiredResultKeys.has(k)) {
-        await this.state.storage.delete(k);
-      }
-    }
-
-    await this.state.storage.put(META_KEY, {
-      nextSeq: snap.nextSeq,
-      pair: snap.pair,
-    });
-
-    // One-time cleanup of the legacy snapshot key. delete() is a no-op
-    // if the key doesn't exist, so this is cheap to repeat.
-    await this.state.storage.delete(LEGACY_SNAPSHOT_KEY);
   }
 
   async fetch(request: Request): Promise<Response> {

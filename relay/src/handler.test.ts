@@ -264,6 +264,51 @@ describe("DELETE /v1/pair", () => {
   });
 });
 
+describe("POST /v1/results persistent flag", () => {
+  it("defaults to persistent=true when the field is omitted", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("a", "blob");
+    const { status, body, mailbox } = await call(
+      "POST",
+      "/v1/results",
+      { job_id: "a", page_index: 0, blob: "uuid" },
+      mb,
+    );
+    expect(status).toBe(201);
+    expect(body.persistent).toBe(true);
+    expect(mailbox.snapshot().results).toHaveLength(1);
+  });
+
+  it("honours persistent=false and drops the result from snapshot", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("a", "blob");
+    const { status, body, mailbox } = await call(
+      "POST",
+      "/v1/results",
+      { job_id: "a", page_index: 0, blob: "ciphertext", persistent: false },
+      mb,
+    );
+    expect(status).toBe(201);
+    expect(body.persistent).toBe(false);
+    expect(mailbox.snapshot().results).toHaveLength(0);
+    // The in-memory mailbox still has it for the CLI poll.
+    expect(mailbox.inMemorySnapshot().results).toHaveLength(1);
+  });
+
+  it("rejects a non-boolean persistent field with invalid_persistent", async () => {
+    const mb = newMailbox();
+    mb.enqueueJob("a", "blob");
+    const { status, body } = await call(
+      "POST",
+      "/v1/results",
+      { job_id: "a", page_index: 0, blob: "x", persistent: "yes" },
+      mb,
+    );
+    expect(status).toBe(400);
+    expect(body.code).toBe("invalid_persistent");
+  });
+});
+
 describe("DELETE /v1/jobs", () => {
   it("removes the job and its result pages, returns removed=true", async () => {
     const mb = newMailbox();

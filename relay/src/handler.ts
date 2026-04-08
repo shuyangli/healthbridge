@@ -152,16 +152,27 @@ async function postResult(request: Request, mailbox: Mailbox): Promise<Response>
     job_id?: unknown;
     page_index?: unknown;
     blob?: unknown;
+    persistent?: unknown;
   }>(request);
   const jobId = requireString(body.job_id, "job_id");
   const pageIndex = requireInt(body.page_index, "page_index");
   const blob = requireString(body.blob, "blob");
-  const stored = mailbox.postResult(jobId, pageIndex, blob);
+  // `persistent` is optional so legacy clients keep working — they get
+  // the durable default. New clients explicitly opt OUT for read/sync.
+  let persistent = true;
+  if (body.persistent !== undefined) {
+    if (typeof body.persistent !== "boolean") {
+      throw new BadRequestError("invalid_persistent", "persistent must be a boolean");
+    }
+    persistent = body.persistent;
+  }
+  const stored = mailbox.postResult(jobId, pageIndex, blob, persistent);
   return jsonResponse(201, {
     job_id: stored.jobId,
     page_index: stored.pageIndex,
     posted_at: stored.postedAt,
     expires_at: stored.expiresAt,
+    persistent: stored.persistent,
   });
 }
 
