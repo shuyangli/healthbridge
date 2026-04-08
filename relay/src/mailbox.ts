@@ -7,8 +7,25 @@
 // touches the Workers runtime; everything observable about the relay's
 // behaviour can be exercised from here.
 
-/** Default TTLs in milliseconds. Match the design doc. */
-export const DEFAULT_JOB_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+/**
+ * Default TTLs in milliseconds.
+ *
+ * In this model the "ack" for an inbound job is the iOS app posting a
+ * result for it (postResult auto-prunes the inbound queue entry). If
+ * no result has been posted within DEFAULT_JOB_TTL_MS the job is
+ * considered abandoned — the iPhone is offline, the user revoked the
+ * pair, the catalog type is no longer recognised, etc — and the
+ * eviction sweep drops it. 24 hours is long enough to absorb a
+ * weekend of background eviction without dropping anything legitimate
+ * but short enough that a stale read job ("step_count for the last
+ * 7 days as of yesterday morning") doesn't keep occupying a slot in
+ * the 256-job mailbox cap.
+ *
+ * DEFAULT_RESULT_TTL_MS is the same — once a result has been posted
+ * it sits at most this long before TTL eviction. The CLI's ack-via-
+ * DELETE flow normally drops them much sooner.
+ */
+export const DEFAULT_JOB_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const DEFAULT_RESULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /** Hard limits to keep a single mailbox bounded. */
@@ -400,6 +417,15 @@ export class Mailbox {
       persistent: effectivePersistent,
     };
     this.results.push(stored);
+    // Auto-prune the inbound job entry: posting a result IS the
+    // ack-of-drain for the inbound queue. The iOS app will never
+    // re-execute a job whose result is already on the relay (its
+    // drain cursor advanced past it), so leaving the entry in the
+    // queue would just consume one of the 256 MAX_JOBS_PER_MAILBOX
+    // slots and eventually 429. The cleanup is idempotent — if a
+    // future page for the same jobId arrives, the inbound is
+    // already gone and the filter is a no-op.
+    this.jobs = this.jobs.filter((j) => j.jobId !== jobId);
     this.wakeResultWaiters(jobId);
     return stored;
   }

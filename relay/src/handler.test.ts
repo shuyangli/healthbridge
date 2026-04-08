@@ -339,11 +339,17 @@ describe("DELETE /v1/jobs", () => {
 });
 
 describe("DELETE /v1/results", () => {
-  it("removes only the result pages, leaves the inbound job", async () => {
+  it("removes only the result pages and leaves any unrelated inbound jobs alone", async () => {
     const mb = newMailbox();
-    mb.enqueueJob("alpha", "blob-a");
-    mb.postResult("alpha", 0, "result");
-    const { status, body } = await call("DELETE", "/v1/results?job_id=alpha", undefined, mb);
+    // Note: postResult auto-prunes the inbound entry for the
+    // matching jobId. Use an orphan jobId for the result so the
+    // unrelated inbound job below stays visible.
+    mb.enqueueJob("untouched", "blob-x");
+    mb.postResult("orphan", 0, "result");
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(1);
+
+    const { status, body } = await call("DELETE", "/v1/results?job_id=orphan", undefined, mb);
     expect(status).toBe(200);
     expect(body).toEqual({ ok: true, removed: true });
     expect(mb.stats().pendingJobs).toBe(1);

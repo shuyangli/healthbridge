@@ -272,14 +272,17 @@ describe("Mailbox.snapshot/restore", () => {
     const a = new Mailbox(fakeDeps(2000));
     a.enqueueJob("j1", "blob1");
     a.enqueueJob("j2", "blob2");
+    // postResult auto-prunes the matching inbound entry, so j1 is
+    // gone from the pending queue after this line.
     a.postResult("j1", 0, "result-1");
     const snap = a.snapshot();
 
     const b = new Mailbox(fakeDeps(2000));
     b.restore(snap);
-    expect(b.stats().pendingJobs).toBe(2);
+    expect(b.stats().pendingJobs).toBe(1);
     expect(b.stats().pendingResults).toBe(1);
-    // Next enqueue should continue the seq, not reset it.
+    // Next enqueue should continue the seq, not reset it. j1's seq
+    // was 1, j2's was 2, so the next one is 3.
     const next = b.enqueueJob("j3", "blob3");
     expect(next.seq).toBe(3);
   });
@@ -305,17 +308,21 @@ describe("Mailbox eviction", () => {
 });
 
 describe("Mailbox.deleteJob", () => {
-  it("removes the job and any result pages and reports true", () => {
+  it("removes any result pages for the jobId and reports true", () => {
     const mb = new Mailbox(fakeDeps(0));
     mb.enqueueJob("alpha", "blob-a");
     mb.enqueueJob("beta", "blob-b");
+    // postResult auto-prunes inbound entries, so alpha and beta are
+    // already gone from pendingJobs by the time we call deleteJob.
+    // What's left to delete are the result pages.
     mb.postResult("alpha", 0, "result-a-0");
     mb.postResult("alpha", 1, "result-a-1");
     mb.postResult("beta", 0, "result-b");
+    expect(mb.stats().pendingJobs).toBe(0);
 
     const removed = mb.deleteJob("alpha");
     expect(removed).toBe(true);
-    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingJobs).toBe(0);
     expect(mb.stats().pendingResults).toBe(1);
   });
 
@@ -340,10 +347,15 @@ describe("Mailbox.deleteJob", () => {
 });
 
 describe("Mailbox.deleteResultsFor", () => {
-  it("removes only the result pages, not the inbound job", () => {
+  it("removes only the result pages, not any inbound job", () => {
     const mb = new Mailbox(fakeDeps(0));
-    mb.enqueueJob("alpha", "blob-a");
+    // Use postResult for an orphan jobId so the inbound queue is
+    // unaffected (postResult auto-prunes any matching inbound).
+    mb.enqueueJob("untouched", "blob-x");
     mb.postResult("alpha", 0, "result");
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(1);
+
     expect(mb.deleteResultsFor("alpha")).toBe(true);
     expect(mb.stats().pendingJobs).toBe(1);
     expect(mb.stats().pendingResults).toBe(0);
@@ -352,6 +364,39 @@ describe("Mailbox.deleteResultsFor", () => {
   it("returns false when no results match", () => {
     const mb = new Mailbox(fakeDeps(0));
     expect(mb.deleteResultsFor("ghost")).toBe(false);
+  });
+});
+
+describe("Mailbox.postResult prunes inbound jobs", () => {
+  it("removes the matching inbound job entry on post", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.enqueueJob("alpha", "blob-a");
+    mb.enqueueJob("beta", "blob-b");
+    expect(mb.stats().pendingJobs).toBe(2);
+
+    mb.postResult("alpha", 0, "result", true);
+    expect(mb.stats().pendingJobs).toBe(1);
+    expect(mb.stats().pendingResults).toBe(1);
+  });
+
+  it("is a no-op when the inbound job is already gone (multi-page case)", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.enqueueJob("alpha", "blob-a");
+    mb.postResult("alpha", 0, "page-0", false);
+    expect(mb.stats().pendingJobs).toBe(0);
+    // Second page for the same jobId — inbound already pruned, no throw.
+    mb.postResult("alpha", 1, "page-1", false);
+    expect(mb.stats().pendingJobs).toBe(0);
+    expect(mb.stats().pendingResults).toBe(2);
+  });
+
+  it("posting a result for an unknown jobId still works (orphan result)", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    // Edge case: relay accepts the result even though no inbound
+    // entry exists (e.g. inbound was pruned by an admin).
+    mb.postResult("ghost", 0, "blob", true);
+    expect(mb.stats().pendingJobs).toBe(0);
+    expect(mb.stats().pendingResults).toBe(1);
   });
 });
 
