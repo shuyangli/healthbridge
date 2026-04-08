@@ -93,3 +93,15 @@ func envOrEmpty(name string) string {
 func withCancellableContext() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
+
+// ackResult tells the relay we're done with a job's result pages so
+// it can prune them now instead of waiting for the 24h TTL eviction.
+// Best-effort: any failure (network, relay down, the entries already
+// gone) is silently swallowed because the relay's TTL eviction will
+// catch up regardless. Uses its own short timeout so a slow relay
+// can't block the user's terminal after a successful read.
+func ackResult(parent context.Context, rc *relay.Client, jobID string) {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	_, _ = rc.PruneResults(ctx, jobID)
+}

@@ -175,6 +175,9 @@ func executeWriteJob(
 		return fmt.Errorf("open result: %w", err)
 	}
 	mirrorComplete(store, job.ID, result)
+	// Ack so the relay prunes the (persistent) write result now
+	// rather than holding it for 24h. Best-effort.
+	ackResult(ctx, rc, job.ID)
 	return emitWriteDone(out, job, result, asJSON)
 }
 

@@ -99,11 +99,35 @@ func (d *FakeIOSDrainer) processOne(ctx context.Context, jb relay.JobBlob) error
 		if err != nil {
 			return fmt.Errorf("drainer: seal result: %w", err)
 		}
-		if _, err := d.Client.PostResult(ctx, job.ID, pageIndex, blob); err != nil {
+		// Mirror the iOS drain loop's persistence policy: read/sync
+		// → ephemeral, write/profile/failed → persistent. Failures are
+		// always persisted so the agent never silently loses an error
+		// report.
+		persistent := persistentForJobAndResult(job.Kind, res.Status)
+		if _, err := d.Client.PostResult(ctx, job.ID, pageIndex, blob, persistent); err != nil {
 			return fmt.Errorf("drainer: post result: %w", err)
 		}
 	}
 	return nil
+}
+
+// persistentForJobAndResult mirrors the iOS-side
+// HealthBridgeApp.shouldPersistResult policy: read/sync results are
+// ephemeral (large blobs, synchronous CLI on the other end);
+// write/profile results are persistent (tiny blobs the agent may
+// come back to retrieve); a failed status overrides kind so error
+// reports survive a Durable Object eviction.
+func persistentForJobAndResult(kind health.JobKind, status health.ResultStatus) bool {
+	if status == health.StatusFailed {
+		return true
+	}
+	switch kind {
+	case health.KindRead, health.KindSync:
+		return false
+	case health.KindWrite, health.KindProfile:
+		return true
+	}
+	return true
 }
 
 func (d *FakeIOSDrainer) runHandler(ctx context.Context, job *health.Job) ([]*health.Result, error) {

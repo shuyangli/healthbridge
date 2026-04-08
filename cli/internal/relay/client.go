@@ -137,11 +137,22 @@ type PostedResult struct {
 }
 
 // PostResult posts one result page for a previously-enqueued job.
-func (c *Client) PostResult(ctx context.Context, jobID string, pageIndex int, blob string) (*PostedResult, error) {
+//
+// `persistent` controls whether the relay writes the blob into its
+// per-pair Durable Object snapshot. Pass true for write/profile
+// results (small UUIDs / typed enum values that should survive a DO
+// eviction), false for read/sync results whose blobs can be large
+// and whose poller is normally still long-polling at the other end.
+// The Go relay client mostly exists for the fakerelay test harness
+// — production posters live on the iOS side — but the param is
+// exposed here for symmetry and so scenario tests can exercise both
+// paths.
+func (c *Client) PostResult(ctx context.Context, jobID string, pageIndex int, blob string, persistent bool) (*PostedResult, error) {
 	body := map[string]any{
 		"job_id":     jobID,
 		"page_index": pageIndex,
 		"blob":       blob,
+		"persistent": persistent,
 	}
 	var out PostedResult
 	if err := c.do(ctx, "POST", "/v1/results", nil, body, &out); err != nil {

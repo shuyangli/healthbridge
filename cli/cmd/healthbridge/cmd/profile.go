@@ -136,6 +136,9 @@ func executeProfileJob(
 		return fmt.Errorf("open result: %w", err)
 	}
 	mirrorComplete(store, job.ID, result)
+	// Ack so the relay prunes the (persistent) profile result now
+	// rather than holding it for 24h. Best-effort.
+	ackResult(ctx, rc, job.ID)
 	return emitProfileDone(out, job, result, asJSON)
 }
 

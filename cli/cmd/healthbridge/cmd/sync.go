@@ -181,6 +181,10 @@ func executeSyncJob(
 			addedTotal += adds
 			deletedTotal += dels
 			if !page.More {
+				// Whole multi-page sync is done — ack so the relay
+				// prunes any straggler ephemeral pages now instead of
+				// waiting on its TTL/alarm sweep.
+				ackResult(ctx, rc, job.ID)
 				return finishSync(out, store, job, addedTotal, deletedTotal, types, flags.JSON)
 			}
 		}

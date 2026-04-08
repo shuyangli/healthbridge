@@ -222,7 +222,7 @@ func TestPostResultAndPollResults(t *testing.T) {
 	c := New(r.server.URL, "01J9ZX0PAIR000000000000001")
 	ctx := context.Background()
 
-	if _, err := c.PostResult(ctx, "job-x", 0, "result-blob"); err != nil {
+	if _, err := c.PostResult(ctx, "job-x", 0, "result-blob", true); err != nil {
 		t.Fatalf("post result: %v", err)
 	}
 

@@ -135,6 +135,10 @@ func executeReadJob(
 		return fmt.Errorf("open result: %w", err)
 	}
 	mirrorComplete(store, job.ID, result)
+	// Ack to the relay so it prunes the (ephemeral) result page now
+	// instead of letting it sit in memory until the alarm or TTL
+	// sweep. Best-effort.
+	ackResult(ctx, rc, job.ID)
 	return emitDone(out, job, result, asJSON)
 }
 

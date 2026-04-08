@@ -171,6 +171,9 @@ func runJobsWait(c *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open result: %w", err)
 	}
+	// Ack so the relay prunes the result now instead of holding it
+	// until TTL eviction.
+	ackResult(ctx, rc, rec.ID)
 	if result.Status == "failed" {
 		code, msg := "unknown", ""
 		if result.Error != nil {
