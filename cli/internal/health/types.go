@@ -18,6 +18,9 @@ const (
 	HeartRateResting      SampleType = "heart_rate_resting"
 	BodyMass              SampleType = "body_mass"
 	BodyMassIndex         SampleType = "body_mass_index"
+	BodyFatPercentage     SampleType = "body_fat_percentage"
+	LeanBodyMass          SampleType = "lean_body_mass"
+	Height                SampleType = "height"
 	BloodGlucose          SampleType = "blood_glucose"
 	DietaryEnergyConsumed SampleType = "dietary_energy_consumed"
 	DietaryProtein        SampleType = "dietary_protein"
@@ -40,7 +43,8 @@ func AllSampleTypes() []SampleType {
 	return []SampleType{
 		StepCount, ActiveEnergyBurned, BasalEnergyBurned,
 		HeartRate, HeartRateResting,
-		BodyMass, BodyMassIndex, BloodGlucose,
+		BodyMass, BodyMassIndex, BodyFatPercentage, LeanBodyMass, Height,
+		BloodGlucose,
 		DietaryEnergyConsumed,
 		DietaryProtein, DietaryCarbohydrates, DietaryFatTotal,
 		DietaryFatSaturated, DietaryFiber, DietarySugar,

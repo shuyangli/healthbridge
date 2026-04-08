@@ -21,7 +21,9 @@ authoritative list for the binary that's actually installed.**
 | `heart_rate` | `count/min` | Instantaneous HR. |
 | `heart_rate_resting` | `count/min` | Daily resting HR aggregate. |
 | `body_mass` | `kg` | Use kg even if the user gave you lbs — convert. |
-| `body_fat_percentage` | `%` | 0–1 range or 0–100? HealthKit uses fraction; pass `0.18` for 18 %. |
+| `body_fat_percentage` | `%` | HealthKit stores as a fraction — pass `0.18` for 18 %, not `18`. |
+| `lean_body_mass` | `kg` | Fat-free mass. Convert from lbs if needed. |
+| `height` | `m` | Standing height in metres. Convert from cm/in/ft before writing. |
 
 ## Nutrition — energy
 
