@@ -33,6 +33,7 @@ func Root() *cobra.Command {
 	root.AddCommand(newJobsCmd())
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newWipeCmd())
+	root.AddCommand(newUnpairCmd())
 	root.AddCommand(newTypesCmd())
 	root.AddCommand(newProfileCmd())
 	root.AddCommand(newVersionCmd())
