@@ -168,31 +168,51 @@ const (
 	Workout       SampleType = "workout"
 )
 
-// AllSampleTypes lists every supported sample type. Used by `healthbridge
-// types` and by validation.
-func AllSampleTypes() []SampleType {
-	return []SampleType{
-		StepCount, ActiveEnergyBurned, BasalEnergyBurned,
-		HeartRate, HeartRateResting,
-		BodyMass, BodyMassIndex, BodyFatPercentage, LeanBodyMass, Height,
-		BloodGlucose,
-		DietaryEnergyConsumed,
-		DietaryProtein, DietaryCarbohydrates, DietaryFatTotal,
-		DietaryFatSaturated, DietaryFiber, DietarySugar,
-		DietaryCholesterol, DietarySodium, DietaryCaffeine,
-		DietaryWater,
-		SleepAnalysis, Workout,
+// nonQuantitySampleTypes are the supported sample types that do NOT
+// have a corresponding HKQuantityTypeIdentifier (and therefore are
+// absent from Catalog). They are appended to AllSampleTypes by hand.
+var nonQuantitySampleTypes = []SampleType{SleepAnalysis, Workout}
+
+// allSampleTypes is built once at package init from Catalog +
+// nonQuantitySampleTypes. validSampleTypes is the same data shaped as
+// a set for O(1) IsValid() lookups.
+var (
+	allSampleTypes   = buildAllSampleTypes()
+	validSampleTypes = buildValidSampleTypes()
+)
+
+func buildAllSampleTypes() []SampleType {
+	out := make([]SampleType, 0, len(Catalog)+len(nonQuantitySampleTypes))
+	for i := range Catalog {
+		out = append(out, Catalog[i].Wire)
 	}
+	out = append(out, nonQuantitySampleTypes...)
+	return out
+}
+
+func buildValidSampleTypes() map[SampleType]struct{} {
+	m := make(map[SampleType]struct{}, len(allSampleTypes))
+	for _, t := range allSampleTypes {
+		m[t] = struct{}{}
+	}
+	return m
+}
+
+// AllSampleTypes lists every supported sample type — every
+// HKQuantityTypeIdentifier in Catalog plus the non-quantity carryover
+// (sleep_analysis, workout). The returned slice is a defensive copy
+// so callers can mutate it without corrupting the package-level
+// cache.
+func AllSampleTypes() []SampleType {
+	out := make([]SampleType, len(allSampleTypes))
+	copy(out, allSampleTypes)
+	return out
 }
 
 // IsValid returns true if t is one of the supported sample types.
 func (t SampleType) IsValid() bool {
-	for _, known := range AllSampleTypes() {
-		if t == known {
-			return true
-		}
-	}
-	return false
+	_, ok := validSampleTypes[t]
+	return ok
 }
 
 // Source describes which app produced a sample. Filled in by the iOS app on

@@ -24,39 +24,16 @@ manifest needs to grow accordingly.`,
 }
 
 // canonicalUnitForType returns the unit string the iOS app most commonly
-// writes for each sample type. This is documentation, not enforcement —
-// HealthKit accepts unit conversions on the way in.
+// writes for each sample type. For HKQuantityTypeIdentifier-backed
+// types this comes straight from the catalog; for the non-quantity
+// carryover (sleep_analysis, workout) the unit is "s" because both are
+// reported as durations.
 func canonicalUnitForType(t health.SampleType) string {
+	if d := health.LookupByWire(t); d != nil {
+		return d.Unit
+	}
 	switch t {
-	case health.StepCount:
-		return "count"
-	case health.ActiveEnergyBurned, health.BasalEnergyBurned, health.DietaryEnergyConsumed:
-		return "kcal"
-	case health.HeartRate, health.HeartRateResting:
-		return "count/min"
-	case health.BodyMass, health.LeanBodyMass:
-		return "kg"
-	case health.BodyMassIndex:
-		return "count"
-	case health.BodyFatPercentage:
-		return "%"
-	case health.Height:
-		return "m"
-	case health.BloodGlucose:
-		return "mg/dL"
-	case health.DietaryProtein, health.DietaryCarbohydrates,
-		health.DietaryFatTotal, health.DietaryFatSaturated,
-		health.DietaryFiber, health.DietarySugar:
-		return "g"
-	case health.DietaryCholesterol, health.DietarySodium:
-		return "mg"
-	case health.DietaryCaffeine:
-		return "mg"
-	case health.DietaryWater:
-		return "mL"
-	case health.SleepAnalysis:
-		return "s"
-	case health.Workout:
+	case health.SleepAnalysis, health.Workout:
 		return "s"
 	default:
 		return ""
