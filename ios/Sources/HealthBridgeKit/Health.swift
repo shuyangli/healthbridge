@@ -33,7 +33,51 @@ extension SampleType: Codable {
 }
 
 public enum JobKind: String, Codable, Sendable {
-    case read, write, sync
+    case read, write, sync, profile
+}
+
+/// Wire identifier for an HKCharacteristicTypeIdentifier value (DOB,
+/// biological sex, blood type, etc.). Unlike SampleType these are NOT
+/// time-series samples — they have no value, no unit, and no time
+/// range — so they travel via the `profile` job kind. The set is
+/// small enough to enumerate by hand here rather than going through
+/// gen-types.
+public struct CharacteristicType: RawRepresentable, Hashable, Sendable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+}
+
+extension CharacteristicType: Codable {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        self.rawValue = try container.decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+extension CharacteristicType {
+    public static let dateOfBirth         = CharacteristicType(rawValue: "date_of_birth")
+    public static let biologicalSex       = CharacteristicType(rawValue: "biological_sex")
+    public static let bloodType           = CharacteristicType(rawValue: "blood_type")
+    public static let fitzpatrickSkinType = CharacteristicType(rawValue: "fitzpatrick_skin_type")
+    public static let wheelchairUse       = CharacteristicType(rawValue: "wheelchair_use")
+    public static let activityMoveMode    = CharacteristicType(rawValue: "activity_move_mode")
+
+    /// Every supported characteristic type. Used by the iOS app's
+    /// pairing-time read-scope set so the agent can ground
+    /// fitness-coaching answers in the user's profile.
+    public static let allKnown: [CharacteristicType] = [
+        .dateOfBirth,
+        .biologicalSex,
+        .bloodType,
+        .fitzpatrickSkinType,
+        .wheelchairUse,
+        .activityMoveMode,
+    ]
 }
 
 public enum ResultStatus: String, Codable, Sendable {
@@ -120,6 +164,29 @@ public struct WriteResult: Codable, Sendable, Equatable {
     public init(uuid: String) { self.uuid = uuid }
 }
 
+/// Plaintext payload for a `profile` job.
+public struct ProfilePayload: Codable, Sendable, Equatable {
+    public var field: CharacteristicType
+
+    public init(field: CharacteristicType) {
+        self.field = field
+    }
+}
+
+/// Plaintext result of a `profile` job. `value` is a stable
+/// snake_case string for enum-typed characteristics or an ISO date
+/// (YYYY-MM-DD) for `date_of_birth`. Empty string means the user has
+/// not set the field in the Health app.
+public struct ProfileResult: Codable, Sendable, Equatable {
+    public var field: CharacteristicType
+    public var value: String
+
+    public init(field: CharacteristicType, value: String) {
+        self.field = field
+        self.value = value
+    }
+}
+
 /// Job is the plaintext envelope an agent submits. The payload is one of
 /// ReadPayload / WritePayload / SyncPayload (M4) and is decoded based on
 /// the job's `kind`. We use AnyCodable so the kit doesn't need to know
@@ -159,6 +226,14 @@ public struct Job: Codable, Sendable {
             throw JobDecodeError.wrongKind(expected: .write, actual: kind)
         }
         return try payload.decode(WritePayload.self)
+    }
+
+    /// Decode the typed payload for a `profile` job.
+    public func decodeProfilePayload() throws -> ProfilePayload {
+        guard kind == .profile else {
+            throw JobDecodeError.wrongKind(expected: .profile, actual: kind)
+        }
+        return try payload.decode(ProfilePayload.self)
     }
 }
 

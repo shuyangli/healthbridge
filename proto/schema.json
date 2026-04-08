@@ -231,12 +231,43 @@
       }
     },
 
+    "characteristicType": {
+      "type": "string",
+      "description": "Wire identifier for an HKCharacteristicTypeIdentifier (read-once profile data: DOB, biological sex, blood type, etc.).",
+      "enum": [
+        "date_of_birth",
+        "biological_sex",
+        "blood_type",
+        "fitzpatrick_skin_type",
+        "wheelchair_use",
+        "activity_move_mode"
+      ]
+    },
+    "profilePayload": {
+      "type": "object",
+      "required": ["field"],
+      "properties": {
+        "field": { "$ref": "#/$defs/characteristicType" }
+      }
+    },
+    "profileResult": {
+      "type": "object",
+      "required": ["field", "value"],
+      "properties": {
+        "field": { "$ref": "#/$defs/characteristicType" },
+        "value": {
+          "type": "string",
+          "description": "Stable snake_case string for enum-typed characteristics ('female', 'a_positive', 'type_iv', 'yes', …) or an ISO date YYYY-MM-DD for date_of_birth. Empty string means the user has not set this field in the Health app."
+        }
+      }
+    },
+
     "job": {
       "type": "object",
       "required": ["id", "kind", "created_at", "payload"],
       "properties": {
         "id":         { "$ref": "#/$defs/ulid" },
-        "kind":       { "type": "string", "enum": ["read", "write", "sync"] },
+        "kind":       { "type": "string", "enum": ["read", "write", "sync", "profile"] },
         "created_at": { "$ref": "#/$defs/timestamp" },
         "deadline":   { "$ref": "#/$defs/timestamp" },
         "payload":    { "type": "object" }

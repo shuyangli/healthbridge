@@ -284,6 +284,18 @@ final class AppCoordinator: ObservableObject {
                 status: .failed,
                 error: JobError(code: "not_implemented", message: "kind sync is M4+")
             )
+        case .profile:
+            // The HealthKit characteristic dispatch (HKHealthStore.
+            // dateOfBirthComponents() / biologicalSex() / etc.) lands
+            // in the next commit alongside the HealthKitMapping
+            // helpers. For now we surface a structured "pending
+            // implementation" error so the agent never silently
+            // accepts a stale or wrong value.
+            return JobResult(
+                jobID: job.id,
+                status: .failed,
+                error: JobError(code: "not_implemented", message: "kind profile is wired in M5.3")
+            )
         }
     }
 
