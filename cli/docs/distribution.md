@@ -2,7 +2,7 @@
 
 - Owner: shuyangli
 - Last updated: 2026-04-07
-- Current status: in progress — GoReleaser config (homebrew cask), release workflow, version command, and the `shuyangli/homebrew-tap` repo are all in place. `goreleaser release --snapshot --clean` runs cleanly and the snapshot binary surfaces the injected version. Next action is to add a top-level `LICENSE`, mint the `HOMEBREW_TAP_GITHUB_TOKEN` PAT, store it as an Actions secret, and cut `v0.1.0`.
+- Current status: in progress — GoReleaser config (homebrew cask), release workflow, version command, and the `shuyangli/homebrew-tap` repo are all in place. `goreleaser release --snapshot --clean` runs cleanly and the snapshot binary surfaces the injected version. Next action is to add a top-level `LICENSE`, mint the `HOMEBREW_TAP_GITHUB_TOKEN` PAT, store it as an Actions secret, and cut `v0.0.1`.
 
 ## Motivation
 
@@ -86,7 +86,7 @@ and runs `goreleaser release --clean` from `cli/`.
 - **No LICENSE file at the repo root.** The skill manifest declares
   MIT, but the formula's `license "MIT"` field is currently a claim
   the repo doesn't back up. Add a `LICENSE` file before tagging
-  `v0.1.0`. Tracked separately — this design doc does not create one.
+  `v0.0.1`. Tracked separately — this design doc does not create one.
 - **Go 1.26.1 is recent.** `actions/setup-go` should resolve it, but
   if the runner image lags we can pin to a slightly older patch
   version, or lower `go.mod`'s directive. The user has approved
@@ -99,7 +99,7 @@ and runs `goreleaser release --clean` from `cli/`.
 - **Tap repo bootstrap is manual one-time work.** Creating the
   `shuyangli/homebrew-tap` repo and minting the PAT can't be
   automated from this repo. Documented in the milestone checklist.
-- **Versioning discipline starts now.** Once `v0.1.0` ships, brew
+- **Versioning discipline starts now.** Once `v0.0.1` ships, brew
   users will pin against it. Pre-1.0 we treat the wire format as
   unstable; bumping the minor (`v0.2.0`, etc.) is the signal that
   jobs/results may have changed shape.
@@ -123,7 +123,7 @@ and runs `goreleaser release --clean` from `cli/`.
    `HOMEBREW_TAP_GITHUB_TOKEN` in this repo's Actions secrets.
 5. **[pending]** Add a `LICENSE` file (MIT) to the repo root so the
    cask's `license "MIT"` claim is honest.
-6. **[pending]** Tag `v0.1.0` (`git tag v0.1.0 && git push --tags`).
+6. **[pending]** Tag `v0.0.1` (`git tag v0.0.1 && git push --tags`).
    Watch the workflow, confirm the tap PR opens and merges, then
    `brew install shuyangli/tap/healthbridge` end-to-end on a clean
    machine.
