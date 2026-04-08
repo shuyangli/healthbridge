@@ -34,6 +34,7 @@ func Root() *cobra.Command {
 	root.AddCommand(newSyncCmd())
 	root.AddCommand(newWipeCmd())
 	root.AddCommand(newTypesCmd())
+	root.AddCommand(newProfileCmd())
 	root.AddCommand(newVersionCmd())
 	return root
 }

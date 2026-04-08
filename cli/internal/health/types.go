@@ -238,10 +238,66 @@ type Sample struct {
 type JobKind string
 
 const (
-	KindRead  JobKind = "read"
-	KindWrite JobKind = "write"
-	KindSync  JobKind = "sync"
+	KindRead    JobKind = "read"
+	KindWrite   JobKind = "write"
+	KindSync    JobKind = "sync"
+	KindProfile JobKind = "profile"
 )
+
+// CharacteristicType is the wire-format identifier for an
+// HKCharacteristicTypeIdentifier value (read-once profile data: date
+// of birth, biological sex, blood type, etc.). Characteristic types
+// are NOT samples — they have no time range, no value, and no unit
+// — so they live in their own enum and travel via the `profile` job
+// kind rather than the read/write/sync surface.
+type CharacteristicType string
+
+const (
+	CharDateOfBirth         CharacteristicType = "date_of_birth"
+	CharBiologicalSex       CharacteristicType = "biological_sex"
+	CharBloodType           CharacteristicType = "blood_type"
+	CharFitzpatrickSkinType CharacteristicType = "fitzpatrick_skin_type"
+	CharWheelchairUse       CharacteristicType = "wheelchair_use"
+	CharActivityMoveMode    CharacteristicType = "activity_move_mode"
+)
+
+// AllCharacteristicTypes lists every supported characteristic type.
+// Used by `healthbridge profile` arg validation and by the codegen.
+func AllCharacteristicTypes() []CharacteristicType {
+	return []CharacteristicType{
+		CharDateOfBirth,
+		CharBiologicalSex,
+		CharBloodType,
+		CharFitzpatrickSkinType,
+		CharWheelchairUse,
+		CharActivityMoveMode,
+	}
+}
+
+// IsValid reports whether c is a recognised characteristic type.
+func (c CharacteristicType) IsValid() bool {
+	for _, k := range AllCharacteristicTypes() {
+		if c == k {
+			return true
+		}
+	}
+	return false
+}
+
+// ProfilePayload is the plaintext payload for a `profile` job.
+type ProfilePayload struct {
+	Field CharacteristicType `json:"field"`
+}
+
+// ProfileResult is what comes back from a successful `profile` job.
+// Value is a stable snake_case string for enum-typed characteristics
+// (`female`, `a_positive`, `type_iv`, `yes`, …) and an ISO date
+// (YYYY-MM-DD) for `date_of_birth`. Empty string means "user has not
+// set this in the Health app".
+type ProfileResult struct {
+	Field CharacteristicType `json:"field"`
+	Value string             `json:"value"`
+}
 
 // ReadPayload is the plaintext payload for a `read` job.
 type ReadPayload struct {
