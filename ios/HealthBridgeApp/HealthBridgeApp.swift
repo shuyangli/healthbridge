@@ -83,14 +83,7 @@ final class AppCoordinator: ObservableObject {
             if case .authorized = auth, pair != nil {
                 startDrainLoopIfNeeded()
             }
-        case .inactive:
-            // .inactive is transient — iOS sends it for notification
-            // banners, control center pull-down, app switcher preview,
-            // incoming-call sheet, etc. The app is still on screen and
-            // the user expects the drain ticker to keep running. Only
-            // .background means the user actually left the app.
-            break
-        case .background:
+        case .inactive, .background:
             stopDrainLoop()
         @unknown default:
             break
@@ -169,47 +162,6 @@ final class AppCoordinator: ObservableObject {
     }
 
     // MARK: - Drain loop
-    //
-    // Wakes up every DRAIN_TICK_INTERVAL_MS (10 s) while the app is
-    // foregrounded, asks the relay "anything new?" with a no-wait poll
-    // (waitMs=0), and either:
-    //
-    //   - drains every queued job back-to-back in a tight inner loop
-    //     (no long-polling — once one batch is empty we're done with
-    //     this cycle), or
-    //
-    //   - returns immediately if the relay reports an empty queue.
-    //
-    // Either way, a follow-up tick is scheduled DRAIN_TICK_INTERVAL_MS
-    // later. The DO is therefore "active" for at most a few hundred
-    // milliseconds per tick instead of holding a 25-second long-poll
-    // open every cycle, which is the dominant Cloudflare GB-second cost.
-    //
-    // Foreground-only: stopDrainLoop() cancels the outer task on
-    // backgrounding so we don't burn cycles when the user isn't using
-    // the app.
-
-    /// Wall-clock interval between drain ticks while foregrounded.
-    private static let drainTickIntervalNanos: UInt64 = 10 * 1_000_000_000
-
-    /// How long each drain tick will hold the relay's pollJobs open
-    /// before giving up and going back to sleep. 1 second is a
-    /// compromise between two extremes:
-    ///
-    ///   - waitMs=0: instant return, but a job enqueued at second 1
-    ///     of the 10-second sleep window has to wait the full ~9s
-    ///     for the next tick. Worst-case ack latency is the entire
-    ///     tick interval.
-    ///
-    ///   - waitMs=25_000 (the relay's default): every tick holds
-    ///     the per-pair Durable Object open for 25s of GB-second
-    ///     billable wall time. This is the cost regression we're
-    ///     trying to avoid.
-    ///
-    /// 1 second of long-poll catches anything posted within the
-    /// (small) window between an enqueue and the next tick at a
-    /// fraction of the cost.
-    private static let drainPollWaitMs: Int = 1000
 
     func startDrainLoopIfNeeded() {
         guard drainTask == nil else { return }
@@ -218,39 +170,14 @@ final class AppCoordinator: ObservableObject {
             return
         }
         drainTask = Task { @MainActor in
-            log.info("drain ticker started, interval=10s")
-            while !Task.isCancelled {
-                var drainedThisCycle = 0
-                do {
-                    drainedThisCycle = try await self.drainCycle(pair: pair)
-                } catch is CancellationError {
-                    // expected on backgrounding; bail out cleanly
-                    break
-                } catch {
-                    // Transient post failure or network blip. Log and
-                    // wait the next tick to retry — no tight retry loop.
-                    self.lastError = "\(error)"
-                    self.status = "Drain hiccup: \(error.localizedDescription)"
-                    log.error("drainCycle failed: \(error.localizedDescription, privacy: .public)")
-                }
-                // Adaptive cadence: if this cycle drained anything, the
-                // pair is actively in use — poll again immediately
-                // instead of sleeping. Only sleep when an idle cycle
-                // returns empty. This collapses the "user kicks off a
-                // 100-job loop test" case from N×tick_interval to
-                // ~N×poll_wait, while still resting at the 10-s tick
-                // interval when nothing's happening.
-                if drainedThisCycle > 0 {
-                    continue
-                }
-                do {
-                    try await Task.sleep(nanoseconds: Self.drainTickIntervalNanos)
-                } catch {
-                    // Cancelled while sleeping → exit cleanly.
-                    break
-                }
+            do {
+                try await self.drainLoop(pair: pair)
+            } catch is CancellationError {
+                // expected on backgrounding
+            } catch {
+                self.lastError = "\(error)"
+                self.status = "Drain stopped: \(error.localizedDescription)"
             }
-            log.info("drain ticker stopped")
             self.drainTask = nil
         }
     }
@@ -263,65 +190,49 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// One drain tick. Polls the relay (since=0, short long-poll) for
-    /// any currently-queued jobs and drains them all. Returns the
-    /// number of jobs drained this cycle so the outer ticker can
-    /// decide whether to sleep or immediately re-fire (active-pair
-    /// adaptive cadence).
-    ///
-    /// The relay's auto-prune-on-postResult invariant means the queue
-    /// only ever contains undrained jobs, so we don't need a cursor
-    /// to filter out duplicates — anything pollJobs returns is by
-    /// definition work we still owe the agent. The cursor concept
-    /// that lived here previously is now redundant and was the source
-    /// of a stale-cursor wedge: after the relay's v3 storage
-    /// migration the iOS-side `lastDrainedSeq` could end up higher
-    /// than the relay's `nextSeq`, and `pollJobs(since: stale)`
-    /// would return empty forever.
-    private func drainCycle(pair startingPair: StoredPair) async throws -> Int {
+    private func drainLoop(pair startingPair: StoredPair) async throws {
         guard let relayURL = URL(string: startingPair.relayURL) else {
             self.status = "Invalid relay URL in stored pair."
-            return 0
+            return
         }
         guard let keyBytes = Data(hexString: startingPair.sessionKeyHex), keyBytes.count == 32 else {
             self.status = "Invalid session key in stored pair — re-pair from your Mac."
-            return 0
+            return
         }
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: startingPair.pairID)
         let client = RelayClient(baseURL: relayURL, pairID: startingPair.pairID, authToken: startingPair.authToken)
 
-        var drained = 0
-        // Drain everything currently queued. Each iteration uses a
-        // short long-poll (drainPollWaitMs) so a job enqueued just
-        // before this tick fires can be picked up immediately. When
-        // a poll returns empty, the tick is done.
+        // Resume from the highest seq we've already drained, persisted in
+        // the pair record. This is what makes a foreground/background
+        // cycle (or a process restart) idempotent — without it, we'd
+        // re-execute every job in the relay's mailbox and double-save
+        // HealthKit samples on every wake.
+        var cursor: Int64 = startingPair.lastDrainedSeq
+        log.info("drainLoop start cursor=\(cursor, privacy: .public)")
         while !Task.isCancelled {
-            let page = try await client.pollJobs(since: 0, waitMs: Self.drainPollWaitMs)
-            log.debug("drainCycle poll → jobs=\(page.jobs.count, privacy: .public) nextCursor=\(page.nextCursor, privacy: .public)")
-            if page.jobs.isEmpty {
-                return drained
-            }
+            let page = try await client.pollJobs(since: cursor, waitMs: 25_000)
             for jb in page.jobs {
                 let outcome = await self.processOneJob(jb: jb, session: session, client: client)
                 switch outcome {
                 case .processed, .skipped:
-                    drained += 1
-                    // Cursor advance is now informational only — the
-                    // auto-prune on the relay side is the real "ack".
-                    // We still persist lastDrainedSeq for diagnostics
-                    // and so the legacy field on disk doesn't decay.
+                    // Persist after every job, not just at the end of
+                    // the page, so a crash mid-page doesn't replay
+                    // earlier jobs.
+                    cursor = jb.seq
                     self.advanceCursor(to: jb.seq)
                 case .transient(let err):
-                    // Network/5xx failure on the relay POST. The
-                    // relay still has the inbound entry (no result
-                    // posted), so the next tick will pull it again.
+                    // Network/5xx failure on the relay POST. Don't
+                    // advance — the next loop iteration will retry the
+                    // same job. Re-throw to bubble up so the parent
+                    // task either retries or surfaces the error.
                     throw err
                 }
             }
-            // Loop back: maybe more jobs landed while we were
-            // executing this batch.
+            if page.nextCursor > cursor {
+                cursor = page.nextCursor
+                self.advanceCursor(to: page.nextCursor)
+            }
         }
-        return drained
     }
 
     /// Outcome of one drain iteration's per-job step. Distinguishes
