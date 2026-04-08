@@ -82,6 +82,18 @@ Detailed flags, JSON output shapes, sample-type catalog, and error
 codes are in [references/COMMANDS.md](references/COMMANDS.md) and
 [references/TYPES.md](references/TYPES.md). Load them on demand.
 
+The catalog covers **every non-deprecated `HKQuantityTypeIdentifier`
+Apple ships** — 119 quantity types across activity, body
+measurements, vital signs, lab results, nutrition, hearing, mobility,
+reproductive, UV, diving, alcohol, and sleep — plus `sleep_analysis`
+and `workout`. If the user asks about a metric you don't recognise by
+name, run `healthbridge types --json` to find the canonical wire
+name; almost anything Health.app shows is in there. Read access is
+requested for every type at pairing time. Write access is restricted
+to the "agent could plausibly log this" set: macros + minerals +
+vitamins, body weight / fat / lean / waist / height, glucose, blood
+pressure, and alcoholic-beverage count.
+
 ## Worked examples
 
 ### Logging breakfast (happy path)
