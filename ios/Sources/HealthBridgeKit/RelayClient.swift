@@ -138,8 +138,22 @@ public actor RelayClient {
         )
     }
 
-    public func postResult(jobID: String, pageIndex: Int, blob: String) async throws -> PostedResult {
-        let body = PostResultRequest(jobID: jobID, pageIndex: pageIndex, blob: blob)
+    /// Post one result page for a previously-drained job.
+    ///
+    /// `persistent` controls whether the relay writes the blob into
+    /// the per-pair Durable Object snapshot. Pass `true` for write/
+    /// profile results (small UUIDs / typed enum values that should
+    /// survive a DO eviction). Pass `false` for read/sync results
+    /// whose blobs can be large and whose CLI is normally still
+    /// long-polling at the other end — the relay will hold them in
+    /// memory only and let them vanish on eviction.
+    public func postResult(
+        jobID: String,
+        pageIndex: Int,
+        blob: String,
+        persistent: Bool
+    ) async throws -> PostedResult {
+        let body = PostResultRequest(jobID: jobID, pageIndex: pageIndex, blob: blob, persistent: persistent)
         return try await request(method: "POST", path: "/v1/results", query: [:], body: body)
     }
 
@@ -207,10 +221,12 @@ public actor RelayClient {
         let jobID: String
         let pageIndex: Int
         let blob: String
+        let persistent: Bool
         enum CodingKeys: String, CodingKey {
             case jobID = "job_id"
             case pageIndex = "page_index"
             case blob
+            case persistent
         }
     }
 

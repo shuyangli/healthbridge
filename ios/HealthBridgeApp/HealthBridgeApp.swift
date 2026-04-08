@@ -250,6 +250,24 @@ final class AppCoordinator: ObservableObject {
         case transient(Error)
     }
 
+    /// Decide whether a result should persist into the relay's
+    /// snapshot. Read/sync results are ephemeral — their blobs can be
+    /// large and the CLI is normally still long-polling, so the relay
+    /// keeps them in memory only and lets them vanish on a Durable
+    /// Object eviction. Write/profile results are tiny and the CLI
+    /// may legitimately come back later, so they're persisted. A
+    /// failed status is always persisted regardless of kind so the
+    /// agent never silently loses an error report.
+    private static func shouldPersistResult(jobKind: JobKind, status: ResultStatus) -> Bool {
+        if status == .failed { return true }
+        switch jobKind {
+        case .read, .sync:
+            return false
+        case .write, .profile:
+            return true
+        }
+    }
+
     /// Wire-format error codes the relay returns when a result blob
     /// cannot be accepted at all. The iOS side treats these as
     /// "permanent" — replace the result with a tiny failure payload,
@@ -298,9 +316,22 @@ final class AppCoordinator: ObservableObject {
             )
         }
 
+        // Read/sync results have potentially-large blobs and a CLI
+        // that's normally still long-polling at the other end →
+        // ephemeral. Write/profile/(failed) results have tiny blobs
+        // that the CLI may legitimately come back to retrieve →
+        // persistent. The relay strips ephemeral entries from its
+        // snapshot so they vanish on a Durable Object eviction.
+        let persistent = Self.shouldPersistResult(jobKind: job.kind, status: result.status)
+
         do {
             let blob = try session.sealResult(jobID: job.id, pageIndex: result.pageIndex, result)
-            _ = try await client.postResult(jobID: job.id, pageIndex: result.pageIndex, blob: blob)
+            _ = try await client.postResult(
+                jobID: job.id,
+                pageIndex: result.pageIndex,
+                blob: blob,
+                persistent: persistent
+            )
             self.drainedCount += 1
             return .processed
         } catch let err as RelayClient.RelayError where err.code == "duplicate_result_page" {
@@ -329,7 +360,14 @@ final class AppCoordinator: ObservableObject {
             )
             do {
                 let fallbackBlob = try session.sealResult(jobID: job.id, pageIndex: 0, fallback)
-                _ = try await client.postResult(jobID: job.id, pageIndex: 0, blob: fallbackBlob)
+                // Failure fallbacks are tiny and the CLI almost
+                // always wants to see them — persist.
+                _ = try await client.postResult(
+                    jobID: job.id,
+                    pageIndex: 0,
+                    blob: fallbackBlob,
+                    persistent: true
+                )
             } catch {
                 log.error("fallback post also failed for seq=\(jb.seq, privacy: .public): \(error.localizedDescription, privacy: .public) — advancing anyway to unwedge")
             }
