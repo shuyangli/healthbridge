@@ -90,3 +90,14 @@ homebrew_casks:
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
+    # Strip the macOS quarantine xattr after install. Without this,
+    # Gatekeeper kills the binary on first launch because we are not
+    # an Apple Developer ID-signed/notarized publisher. Brew formulas
+    # bypass quarantine automatically; casks (which is what we ship)
+    # do not.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/healthbridge"]
+          end
