@@ -252,10 +252,17 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// One drain tick. Polls the relay with waitMs=0; if there are
-    /// queued jobs, drains them all (looping until the queue is empty)
-    /// then returns. Never holds a long-poll open. The outer ticker
-    /// schedules the next call.
+    /// One drain tick. Polls the relay (since=0, short long-poll) for
+    /// any currently-queued jobs and drains them all. The relay's
+    /// auto-prune-on-postResult invariant means the queue only ever
+    /// contains undrained jobs, so we don't need a cursor to filter
+    /// out duplicates — anything pollJobs returns is by definition
+    /// work we still owe the agent. The cursor concept that lived
+    /// here previously is now redundant and was the source of a
+    /// stale-cursor wedge: after the relay's v3 storage migration
+    /// the iOS-side `lastDrainedSeq` could end up higher than the
+    /// relay's `nextSeq`, and `pollJobs(since: stale)` would return
+    /// empty forever.
     private func drainCycle(pair startingPair: StoredPair) async throws {
         guard let relayURL = URL(string: startingPair.relayURL) else {
             self.status = "Invalid relay URL in stored pair."
@@ -268,43 +275,31 @@ final class AppCoordinator: ObservableObject {
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: startingPair.pairID)
         let client = RelayClient(baseURL: relayURL, pairID: startingPair.pairID, authToken: startingPair.authToken)
 
-        // Resume from the highest seq we've already drained, persisted
-        // in the pair record. Idempotent across foreground/background
-        // cycles and process restarts.
-        var cursor: Int64 = self.pair?.lastDrainedSeq ?? startingPair.lastDrainedSeq
-
         // Drain everything currently queued. Each iteration uses a
         // short long-poll (drainPollWaitMs) so a job enqueued just
         // before this tick fires can be picked up immediately. When
         // a poll returns empty, the tick is done.
         while !Task.isCancelled {
-            let page = try await client.pollJobs(since: cursor, waitMs: Self.drainPollWaitMs)
+            let page = try await client.pollJobs(since: 0, waitMs: Self.drainPollWaitMs)
+            log.debug("drainCycle poll → jobs=\(page.jobs.count, privacy: .public) nextCursor=\(page.nextCursor, privacy: .public)")
             if page.jobs.isEmpty {
-                if page.nextCursor > cursor {
-                    cursor = page.nextCursor
-                    self.advanceCursor(to: page.nextCursor)
-                }
                 return
             }
             for jb in page.jobs {
                 let outcome = await self.processOneJob(jb: jb, session: session, client: client)
                 switch outcome {
                 case .processed, .skipped:
-                    // Persist after every job, not just at the end of
-                    // the page, so a crash mid-page doesn't replay
-                    // earlier jobs.
-                    cursor = jb.seq
+                    // Cursor advance is now informational only — the
+                    // auto-prune on the relay side is the real "ack".
+                    // We still persist lastDrainedSeq for diagnostics
+                    // and so the legacy field on disk doesn't decay.
                     self.advanceCursor(to: jb.seq)
                 case .transient(let err):
-                    // Network/5xx failure on the relay POST. Don't
-                    // advance — let the outer ticker retry on the next
-                    // 10-s tick instead of busy-looping here.
+                    // Network/5xx failure on the relay POST. The
+                    // relay still has the inbound entry (no result
+                    // posted), so the next tick will pull it again.
                     throw err
                 }
-            }
-            if page.nextCursor > cursor {
-                cursor = page.nextCursor
-                self.advanceCursor(to: page.nextCursor)
             }
             // Loop back: maybe more jobs landed while we were
             // executing this batch.
