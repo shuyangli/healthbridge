@@ -74,9 +74,21 @@ healthbridge jobs list|get|wait|cancel|prune
 healthbridge status --json
 healthbridge scopes list|grant|revoke
 healthbridge types --json
+healthbridge profile <field> --json     # date_of_birth, biological_sex, blood_type, …
 healthbridge pair                       # user-only; never invoke from agent
 healthbridge wipe [--yes]                # destructive; confirm first
 ```
+
+`healthbridge profile <field>` returns a single HealthKit characteristic
+the user has set in the Health app: `date_of_birth` (ISO date),
+`biological_sex` ("female" / "male" / "other"), `blood_type`
+("a_positive", "ab_negative", …), `fitzpatrick_skin_type` ("type_i"
+through "type_vi"), `wheelchair_use` ("yes" / "no"), or
+`activity_move_mode` ("active_energy" / "apple_move_time"). An empty
+`value` means the user hasn't set the field. Use these to ground
+fitness-coaching answers — e.g. compute age from `date_of_birth`,
+choose calorie estimates from `biological_sex`. **Never invent or
+extrapolate these values; if the field is empty, ask the user.**
 
 Detailed flags, JSON output shapes, sample-type catalog, and error
 codes are in [references/COMMANDS.md](references/COMMANDS.md) and

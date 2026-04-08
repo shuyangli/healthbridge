@@ -22,6 +22,14 @@ read and write Apple Health data on your iPhone. There are three pieces:
   types you authorise during pairing — for example step count, workouts,
   nutrition, heart rate. The iOS app only requests scopes for the types
   you have granted.
+- **HealthKit profile characteristics.** If you grant access, the agent
+  can also read your date of birth, biological sex, blood type,
+  Fitzpatrick skin type, wheelchair-use preference, and activity move
+  mode via the `healthbridge profile` subcommand. These are read-only
+  fields you set in the Health app and never expire; the agent uses
+  them to ground fitness-coaching answers (e.g. age, sex-adjusted
+  basal energy estimates). You can decline any of these in the
+  HealthKit auth sheet at pairing time.
 - **Pairing material.** A random 26-character pair ID, two X25519
   public keys, and a 32-byte Bearer token issued by the relay.
 - **Audit log.** The iOS app keeps a local list of every job the CLI

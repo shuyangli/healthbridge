@@ -136,11 +136,13 @@ enum HealthKitMapping {
         }
     }
 
-    /// Read scopes the app requests at pairing time. Includes the
-    /// sleep_analysis category type and the workout type in addition
-    /// to every HKQuantityTypeIdentifier in the catalog. This is the
-    /// "agent can read anything Apple ships" surface — the cost is a
-    /// long HealthKit auth sheet.
+    /// Read scopes the app requests at pairing time. Includes:
+    ///   - every HKQuantityTypeIdentifier in the catalog
+    ///   - sleep_analysis (HKCategoryType) and workout (HKWorkoutType)
+    ///   - every HKCharacteristicTypeIdentifier the agent can profile
+    ///
+    /// This is the "agent can read anything Apple ships" surface —
+    /// the cost is a long HealthKit auth sheet at first launch.
     static func readScopes() -> Set<HKObjectType> {
         var out: Set<HKObjectType> = []
         for s in SampleType.allKnown {
@@ -148,7 +150,148 @@ enum HealthKitMapping {
                 out.insert(t)
             }
         }
+        for c in CharacteristicType.allKnown {
+            if let t = characteristicObjectType(for: c) {
+                out.insert(t)
+            }
+        }
         return out
+    }
+
+    /// Map a wire-format CharacteristicType to its
+    /// HKCharacteristicType. Returns nil if HealthKit on this OS
+    /// doesn't recognise the identifier (shouldn't happen for any of
+    /// the six characteristics we ship on iOS 18+).
+    static func characteristicObjectType(for c: CharacteristicType) -> HKCharacteristicType? {
+        switch c {
+        case .dateOfBirth:
+            return HKObjectType.characteristicType(forIdentifier: .dateOfBirth)
+        case .biologicalSex:
+            return HKObjectType.characteristicType(forIdentifier: .biologicalSex)
+        case .bloodType:
+            return HKObjectType.characteristicType(forIdentifier: .bloodType)
+        case .fitzpatrickSkinType:
+            return HKObjectType.characteristicType(forIdentifier: .fitzpatrickSkinType)
+        case .wheelchairUse:
+            return HKObjectType.characteristicType(forIdentifier: .wheelchairUse)
+        case .activityMoveMode:
+            return HKObjectType.characteristicType(forIdentifier: .activityMoveMode)
+        default:
+            return nil
+        }
+    }
+
+    /// Read a single characteristic from the HealthStore and return
+    /// the stable wire-format value the agent expects (snake_case for
+    /// enum-typed characteristics, ISO date for date_of_birth, empty
+    /// string when the user hasn't set the field). Throws iff
+    /// HealthKit's accessor itself throws — `not_set` is reported
+    /// as an empty string, not an error.
+    static func characteristicValue(_ field: CharacteristicType, store: HKHealthStore) throws -> String {
+        switch field {
+        case .dateOfBirth:
+            do {
+                let comps = try store.dateOfBirthComponents()
+                guard let y = comps.year, let m = comps.month, let d = comps.day else {
+                    return ""
+                }
+                return String(format: "%04d-%02d-%02d", y, m, d)
+            } catch let err as NSError where err.code == HKError.errorNoData.rawValue {
+                return ""
+            }
+        case .biologicalSex:
+            do {
+                let v = try store.biologicalSex().biologicalSex
+                return biologicalSexName(v)
+            } catch let err as NSError where err.code == HKError.errorNoData.rawValue {
+                return ""
+            }
+        case .bloodType:
+            do {
+                let v = try store.bloodType().bloodType
+                return bloodTypeName(v)
+            } catch let err as NSError where err.code == HKError.errorNoData.rawValue {
+                return ""
+            }
+        case .fitzpatrickSkinType:
+            do {
+                let v = try store.fitzpatrickSkinType().skinType
+                return fitzpatrickSkinTypeName(v)
+            } catch let err as NSError where err.code == HKError.errorNoData.rawValue {
+                return ""
+            }
+        case .wheelchairUse:
+            do {
+                let v = try store.wheelchairUse().wheelchairUse
+                return wheelchairUseName(v)
+            } catch let err as NSError where err.code == HKError.errorNoData.rawValue {
+                return ""
+            }
+        case .activityMoveMode:
+            do {
+                let v = try store.activityMoveMode().activityMoveMode
+                return activityMoveModeName(v)
+            } catch let err as NSError where err.code == HKError.errorNoData.rawValue {
+                return ""
+            }
+        default:
+            return ""
+        }
+    }
+
+    static func biologicalSexName(_ v: HKBiologicalSex) -> String {
+        switch v {
+        case .notSet: return ""
+        case .female: return "female"
+        case .male:   return "male"
+        case .other:  return "other"
+        @unknown default: return ""
+        }
+    }
+
+    static func bloodTypeName(_ v: HKBloodType) -> String {
+        switch v {
+        case .notSet:     return ""
+        case .aPositive:  return "a_positive"
+        case .aNegative:  return "a_negative"
+        case .bPositive:  return "b_positive"
+        case .bNegative:  return "b_negative"
+        case .abPositive: return "ab_positive"
+        case .abNegative: return "ab_negative"
+        case .oPositive:  return "o_positive"
+        case .oNegative:  return "o_negative"
+        @unknown default: return ""
+        }
+    }
+
+    static func fitzpatrickSkinTypeName(_ v: HKFitzpatrickSkinType) -> String {
+        switch v {
+        case .notSet: return ""
+        case .I:      return "type_i"
+        case .II:     return "type_ii"
+        case .III:    return "type_iii"
+        case .IV:     return "type_iv"
+        case .V:      return "type_v"
+        case .VI:     return "type_vi"
+        @unknown default: return ""
+        }
+    }
+
+    static func wheelchairUseName(_ v: HKWheelchairUse) -> String {
+        switch v {
+        case .notSet: return ""
+        case .no:     return "no"
+        case .yes:    return "yes"
+        @unknown default: return ""
+        }
+    }
+
+    static func activityMoveModeName(_ v: HKActivityMoveMode) -> String {
+        switch v {
+        case .activeEnergy:    return "active_energy"
+        case .appleMoveTime:   return "apple_move_time"
+        @unknown default:      return ""
+        }
     }
 
     /// Write scopes the app requests at pairing time. The set of

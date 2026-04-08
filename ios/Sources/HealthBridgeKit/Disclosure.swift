@@ -14,10 +14,11 @@ public enum Disclosure {
 
     /// Body paragraph immediately under the headline.
     public static let pairingBody = """
-    HealthBridge will share the HealthKit sample types you choose with the \
-    AI agent running on your paired Mac. The data is end-to-end encrypted: \
-    the relay that brokers the connection only sees ciphertext, never your \
-    Health data in the clear.
+    HealthBridge will share the HealthKit sample types and profile \
+    characteristics (date of birth, biological sex, blood type, etc.) \
+    you choose with the AI agent running on your paired Mac. The data \
+    is end-to-end encrypted: the relay that brokers the connection \
+    only sees ciphertext, never your Health data in the clear.
 
     You can revoke the pair, change which sample types are shared, or read \
     the full activity log at any time from the HealthBridge app on this \
