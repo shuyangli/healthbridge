@@ -189,10 +189,10 @@ func TestEnqueueJobAndPollJobs(t *testing.T) {
 	c := New(r.server.URL, "01J9ZX0PAIR000000000000001")
 	ctx := context.Background()
 
-	if _, err := c.EnqueueJob(ctx, "job-1", "blob-1"); err != nil {
+	if _, err := c.EnqueueJob(ctx, "job-1", "blob-1", ""); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	if _, err := c.EnqueueJob(ctx, "job-2", "blob-2"); err != nil {
+	if _, err := c.EnqueueJob(ctx, "job-2", "blob-2", ""); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
@@ -246,7 +246,7 @@ func TestRevokePair(t *testing.T) {
 	c := New(r.server.URL, "01J9ZX0PAIR000000000000001")
 	ctx := context.Background()
 
-	if _, err := c.EnqueueJob(ctx, "job-1", "blob"); err != nil {
+	if _, err := c.EnqueueJob(ctx, "job-1", "blob", ""); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if err := c.RevokePair(ctx); err != nil {
@@ -268,7 +268,7 @@ func TestErrorResponseDecoded(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	c := New(srv.URL, "01J9ZX0PAIR000000000000001")
-	_, err := c.EnqueueJob(context.Background(), "j", "b")
+	_, err := c.EnqueueJob(context.Background(), "j", "b", "")
 	if err == nil {
 		t.Fatal("expected error")
 	}

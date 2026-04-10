@@ -38,27 +38,30 @@ const APNS_ERROR_ENVIRONMENT_REASONS = new Set([
 
 let cachedToken: CachedToken | null = null;
 
+export type PushStyle = "alert" | "silent";
+
 /**
- * Send an alert push to the given APNs device token. The notification
- * uses priority 10 (immediate delivery) and includes both an alert
- * body (so iOS treats it as high-priority) and `content-available: 1`
- * (so the app wakes in the background to drain). Best-effort: logs on
- * failure but never throws.
+ * Send a push to the given APNs device token. "alert" uses priority
+ * 10 with a visible notification; "silent" uses priority 5 with
+ * content-available only. Both include `content-available: 1` so the
+ * app wakes in the background. Best-effort: logs on failure but never
+ * throws.
  */
 export async function sendPush(
   deviceToken: string,
   env: "development" | "production",
   config: ApnsConfig,
+  style: PushStyle = "alert",
 ): Promise<void> {
   try {
     const jwt = await getOrRefreshJwt(config);
-    const primary = await postToApns(deviceToken, env, jwt, config);
+    const primary = await postToApns(deviceToken, env, jwt, config, style);
     if (primary.response.ok) {
-      console.log(`APNs push succeeded: ${primary.response.status} env=${env}`);
+      console.log(`APNs push succeeded: ${primary.response.status} env=${env} style=${style}`);
       return;
     }
 
-    const primaryLabel = `APNs push failed: status=${primary.response.status} env=${env} reason=${primary.reason ?? "unknown"} body=${primary.body}`;
+    const primaryLabel = `APNs push failed: status=${primary.response.status} env=${env} style=${style} reason=${primary.reason ?? "unknown"} body=${primary.body}`;
     const alternateEnv = env === "development" ? "production" : "development";
     if (!shouldRetryWithAlternateEnvironment(primary.response.status, primary.reason)) {
       console.error(primaryLabel);
@@ -66,7 +69,7 @@ export async function sendPush(
     }
 
     console.warn(`${primaryLabel} — retrying with env=${alternateEnv}`);
-    const fallback = await postToApns(deviceToken, alternateEnv, jwt, config);
+    const fallback = await postToApns(deviceToken, alternateEnv, jwt, config, style);
     if (fallback.response.ok) {
       console.warn(
         `APNs push succeeded after env retry: original=${env} fallback=${alternateEnv} status=${fallback.response.status}`,
@@ -162,26 +165,24 @@ async function postToApns(
   env: "development" | "production",
   jwt: string,
   config: ApnsConfig,
+  style: PushStyle,
 ): Promise<{ response: Response; body: string; reason?: string }> {
+  const isAlert = style === "alert";
+  const aps: Record<string, unknown> = { "content-available": 1 };
+  if (isAlert) {
+    aps.alert = { title: "HealthBridge", body: "Your agent requested health data." };
+    aps.sound = "default";
+  }
   const response = await fetch(`${hostForEnvironment(env)}/3/device/${deviceToken}`, {
     method: "POST",
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": config.bundleId,
-      "apns-push-type": "alert",
-      "apns-priority": "10",
+      "apns-push-type": isAlert ? "alert" : "background",
+      "apns-priority": isAlert ? "10" : "5",
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      aps: {
-        alert: {
-          title: "HealthBridge",
-          body: "Your agent requested health data.",
-        },
-        sound: "default",
-        "content-available": 1,
-      },
-    }),
+    body: JSON.stringify({ aps }),
   });
   const body = await response.text().catch(() => "");
   return { response, body, reason: parseApnsReason(body) };

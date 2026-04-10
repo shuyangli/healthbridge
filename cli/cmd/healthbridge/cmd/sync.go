@@ -128,7 +128,7 @@ func executeSyncJob(
 	if err := mirrorEnqueue(store, job, session.PairID); err != nil {
 		return err
 	}
-	if _, err := rc.EnqueueJob(ctx, job.ID, blob); err != nil {
+	if _, err := rc.EnqueueJob(ctx, job.ID, blob, "silent"); err != nil {
 		return err
 	}
 

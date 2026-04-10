@@ -90,9 +90,15 @@ type EnqueuedJob struct {
 	ExpiresAt  int64  `json:"expires_at"`
 }
 
-// EnqueueJob posts an opaque job blob and returns the relay's ack.
-func (c *Client) EnqueueJob(ctx context.Context, jobID, blob string) (*EnqueuedJob, error) {
+// EnqueueJob posts a sealed job blob to the relay. The push parameter
+// controls the APNs notification style: "alert" sends a visible
+// priority-10 notification, "silent" sends a background priority-5
+// push. Pass "" to let the relay default to "silent".
+func (c *Client) EnqueueJob(ctx context.Context, jobID, blob, push string) (*EnqueuedJob, error) {
 	body := map[string]any{"job_id": jobID, "blob": blob}
+	if push != "" {
+		body["push"] = push
+	}
 	var out EnqueuedJob
 	if err := c.do(ctx, "POST", "/v1/jobs", nil, body, &out); err != nil {
 		return nil, err

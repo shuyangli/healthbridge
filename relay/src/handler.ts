@@ -118,15 +118,26 @@ class BadRequestError extends Error {
 }
 
 async function postJob(request: Request, mailbox: Mailbox): Promise<Response> {
-  const body = await readJson<{ job_id?: unknown; blob?: unknown }>(request);
+  const body = await readJson<{ job_id?: unknown; blob?: unknown; push?: unknown }>(request);
   const jobId = requireString(body.job_id, "job_id");
   const blob = requireString(body.blob, "blob");
+  // The CLI can request "alert" (visible, priority 10) or "silent"
+  // (background, priority 5) push style. Default to "silent" for
+  // backwards compatibility with older CLIs.
+  let push: "alert" | "silent" = "silent";
+  if (body.push !== undefined) {
+    if (body.push !== "alert" && body.push !== "silent") {
+      throw new BadRequestError("invalid_push", "push must be 'alert' or 'silent'");
+    }
+    push = body.push;
+  }
   const stored = mailbox.enqueueJob(jobId, blob);
   return jsonResponse(201, {
     job_id: stored.jobId,
     seq: stored.seq,
     enqueued_at: stored.enqueuedAt,
     expires_at: stored.expiresAt,
+    push,
   });
 }
 

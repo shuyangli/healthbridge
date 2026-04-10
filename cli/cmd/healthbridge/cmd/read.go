@@ -110,7 +110,7 @@ func executeReadJob(
 	if err := mirrorEnqueue(store, job, session.PairID); err != nil {
 		return fmt.Errorf("mirror enqueue: %w", err)
 	}
-	if _, err := rc.EnqueueJob(ctx, job.ID, blob); err != nil {
+	if _, err := rc.EnqueueJob(ctx, job.ID, blob, "alert"); err != nil {
 		return fmt.Errorf("enqueue: %w", err)
 	}
 

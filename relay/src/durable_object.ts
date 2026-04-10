@@ -32,7 +32,7 @@
 
 import { Mailbox } from "./mailbox.js";
 import { handleRequest } from "./handler.js";
-import { sendPush, type ApnsConfig } from "./apns.js";
+import { sendPush, type ApnsConfig, type PushStyle } from "./apns.js";
 
 const SNAPSHOT_KEY = "snapshot_v3";
 const LEGACY_V1_KEY = "mailbox_snapshot_v1";
@@ -124,11 +124,11 @@ export class PairMailboxDO {
   }
 
   /**
-   * Fire-and-forget silent push to the iOS device. Called after a
-   * successful job enqueue. If any APNs secret is missing, or no
-   * device token is registered, this is a no-op.
+   * Fire-and-forget push to the iOS device. Called after a successful
+   * job enqueue. If any APNs secret is missing, or no device token is
+   * registered, this is a no-op.
    */
-  private maybeSendPush() {
+  private maybeSendPush(style: PushStyle = "silent") {
     const pair = this.mailbox.getPair();
     if (!pair.deviceToken || !pair.deviceTokenEnv) {
       console.log("maybeSendPush: no device token registered — skipping");
@@ -147,6 +147,7 @@ export class PairMailboxDO {
         pair.deviceToken,
         pair.deviceTokenEnv as "development" | "production",
         config,
+        style,
       ),
     );
   }
@@ -225,11 +226,22 @@ export class PairMailboxDO {
         }
       }
 
-      // Fire a silent push after a successful job enqueue so the iOS
-      // app wakes immediately instead of waiting for its next long-poll.
+      // Fire a push after a successful job enqueue so the iOS app
+      // wakes immediately instead of waiting for its next long-poll.
+      // The CLI specifies "alert" (visible, priority 10) for reads or
+      // "silent" (background, priority 5) for writes/profiles.
       // Best-effort: failures are logged but never block the response.
       if (isJobEnqueue && response.status === 201) {
-        this.maybeSendPush();
+        // Clone+parse the response to extract the push style the CLI
+        // requested. On any parse failure, fall back to silent.
+        let pushStyle: PushStyle = "silent";
+        try {
+          const respBody = await response.clone().json() as { push?: string };
+          if (respBody.push === "alert" || respBody.push === "silent") {
+            pushStyle = respBody.push;
+          }
+        } catch { /* fall back to silent */ }
+        this.maybeSendPush(pushStyle);
       }
 
       return response;
