@@ -1,8 +1,10 @@
-// APNs silent-push sender for Cloudflare Workers.
+// APNs push sender for Cloudflare Workers.
 //
-// Signs an ES256 JWT using the Web Crypto API and sends a
-// `content-available: 1` push to the iOS device. The JWT is cached
-// for 50 minutes (APNs rejects tokens older than 1 hour).
+// Signs an ES256 JWT using the Web Crypto API and sends an alert push
+// with `content-available: 1` to the iOS device. The alert gets
+// priority-10 delivery (immediate) while content-available wakes the
+// app in the background to start draining. The JWT is cached for 50
+// minutes (APNs rejects tokens older than 1 hour).
 //
 // All errors are swallowed and logged — push is best-effort and must
 // never block or fail the enqueueJob path.
@@ -37,10 +39,13 @@ const APNS_ERROR_ENVIRONMENT_REASONS = new Set([
 let cachedToken: CachedToken | null = null;
 
 /**
- * Send a silent push to the given APNs device token. Best-effort:
- * logs on failure but never throws.
+ * Send an alert push to the given APNs device token. The notification
+ * uses priority 10 (immediate delivery) and includes both an alert
+ * body (so iOS treats it as high-priority) and `content-available: 1`
+ * (so the app wakes in the background to drain). Best-effort: logs on
+ * failure but never throws.
  */
-export async function sendSilentPush(
+export async function sendPush(
   deviceToken: string,
   env: "development" | "production",
   config: ApnsConfig,
@@ -163,13 +168,20 @@ async function postToApns(
     headers: {
       authorization: `bearer ${jwt}`,
       "apns-topic": config.bundleId,
-      "apns-push-type": "background",
-      // Priority 5 = "send when convenient" — the right level for
-      // silent push. Priority 10 would require an alert.
-      "apns-priority": "5",
+      "apns-push-type": "alert",
+      "apns-priority": "10",
       "content-type": "application/json",
     },
-    body: JSON.stringify({ aps: { "content-available": 1 } }),
+    body: JSON.stringify({
+      aps: {
+        alert: {
+          title: "HealthBridge",
+          body: "Your agent requested health data.",
+        },
+        sound: "default",
+        "content-available": 1,
+      },
+    }),
   });
   const body = await response.text().catch(() => "");
   return { response, body, reason: parseApnsReason(body) };

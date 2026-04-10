@@ -32,7 +32,7 @@
 
 import { Mailbox } from "./mailbox.js";
 import { handleRequest } from "./handler.js";
-import { sendSilentPush, type ApnsConfig } from "./apns.js";
+import { sendPush, type ApnsConfig } from "./apns.js";
 
 const SNAPSHOT_KEY = "snapshot_v3";
 const LEGACY_V1_KEY = "mailbox_snapshot_v1";
@@ -143,7 +143,7 @@ export class PairMailboxDO {
     // waitUntil keeps the DO alive for the outbound fetch without
     // blocking the response to the CLI.
     this.state.waitUntil(
-      sendSilentPush(
+      sendPush(
         pair.deviceToken,
         pair.deviceTokenEnv as "development" | "production",
         config,

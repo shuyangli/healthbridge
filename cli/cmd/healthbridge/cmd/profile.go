@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -118,11 +119,7 @@ func executeProfileJob(
 		return fmt.Errorf("enqueue: %w", err)
 	}
 
-	waitMs := int(wait / time.Millisecond)
-	if waitMs > relay.DefaultLongPollMs {
-		waitMs = relay.DefaultLongPollMs
-	}
-	resp, err := rc.PollResults(ctx, job.ID, waitMs)
+	resp, err := pollWithNudge(ctx, rc, job.ID, wait, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("poll results: %w", err)
 	}

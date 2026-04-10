@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendSilentPush, type ApnsConfig, __test } from "./apns.js";
+import { sendPush, type ApnsConfig, __test } from "./apns.js";
 
 const CONFIG: ApnsConfig = {
   authKey: [
@@ -40,7 +40,7 @@ describe("apns JWT cache", () => {
   });
 });
 
-describe("sendSilentPush", () => {
+describe("sendPush", () => {
   afterEach(() => {
     __test.resetCache();
     vi.restoreAllMocks();
@@ -59,7 +59,7 @@ describe("sendSilentPush", () => {
       )
       .mockResolvedValueOnce(new Response("", { status: 200 }));
 
-    await sendSilentPush("deadbeef", "development", CONFIG);
+    await sendPush("deadbeef", "development", CONFIG);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toBe(

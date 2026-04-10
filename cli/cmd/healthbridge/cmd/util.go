@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -57,19 +59,71 @@ func newRelayClient(f commonFlags) *relay.Client {
 	return relay.New(f.RelayURL, f.PairID)
 }
 
-// resolveWait returns the wait duration the CLI should pass to long-poll,
-// honouring three sources in priority order:
+// resolveWait returns the total wall-clock time the CLI will spend
+// polling for a result, honouring three sources in priority order:
 //  1. --wait flag (if non-zero)
-//  2. interactive default (5s)
+//  2. interactive default (60s — enough for a push to land)
 //  3. non-TTY default (0s = fire-and-forget)
 func resolveWait(f commonFlags) time.Duration {
 	if f.Wait > 0 {
 		return f.Wait
 	}
 	if isStdoutTerminal() {
-		return 5 * time.Second
+		return 60 * time.Second
 	}
 	return 0
+}
+
+// pollWindowMs is how long each individual poll request blocks on the
+// relay before returning empty. Short enough that the CLI re-evaluates
+// frequently (nudge message, total deadline) without holding a
+// connection open for a long time.
+var pollWindowMs = 3_000
+
+// nudgeDelay is how long to wait before printing the "open the app"
+// hint. Exported as a var so tests can shorten it.
+var nudgeDelay = 10 * time.Second
+
+// pollWithNudge polls for results in a retry loop using short
+// relay-side long-polls (pollWindowMs each). After nudgeDelay without
+// a result it prints a user-facing hint to stderr. Returns the first
+// non-empty result page, or an empty page if totalWait is exhausted.
+func pollWithNudge(
+	ctx context.Context,
+	rc *relay.Client,
+	jobID string,
+	totalWait time.Duration,
+	stderr io.Writer,
+) (*relay.ResultsResponse, error) {
+	start := time.Now()
+	deadline := start.Add(totalWait)
+	nudged := false
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			// Budget exhausted — one final non-blocking check.
+			return rc.PollResults(ctx, jobID, 0)
+		}
+
+		windowMs := pollWindowMs
+		if int(remaining.Milliseconds()) < windowMs {
+			windowMs = int(remaining.Milliseconds())
+		}
+
+		resp, err := rc.PollResults(ctx, jobID, windowMs)
+		if err != nil {
+			return nil, err
+		}
+		if len(resp.Results) > 0 {
+			return resp, nil
+		}
+
+		if !nudged && time.Since(start) >= nudgeDelay {
+			fmt.Fprintln(stderr, "Waiting for iPhone… open the HealthBridge app to speed this up.")
+			nudged = true
+		}
+	}
 }
 
 func isStdoutTerminal() bool {

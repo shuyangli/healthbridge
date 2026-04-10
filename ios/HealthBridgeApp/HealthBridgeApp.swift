@@ -11,6 +11,7 @@ import SwiftUI
 import HealthKit
 import CryptoKit
 import HealthBridgeKit
+import UserNotifications
 import OSLog
 
 /// All HealthKit + drain-loop diagnostics flow through this logger.
@@ -71,10 +72,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         log.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
-    /// Silent push handler — iOS calls this when a `content-available: 1`
-    /// push arrives. We kick the drain loop (which is a no-op if it's
-    /// already running) and call the completion handler when the first
-    /// poll returns so iOS credits us for finishing fast.
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Request notification permission early so alert pushes from the
+        // relay display immediately. The user sees a one-time system
+        // prompt; if they decline, pushes still wake the app via
+        // content-available but won't show a banner.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                log.error("notification auth error: \(error.localizedDescription, privacy: .public)")
+            }
+            log.info("notification auth granted=\(granted, privacy: .public)")
+        }
+        return true
+    }
+
+    /// Push handler — iOS calls this when a push with `content-available: 1`
+    /// arrives (whether alert or silent). We kick the drain loop and call
+    /// the completion handler when the first poll returns so iOS credits
+    /// us for finishing fast.
     func application(
         _ application: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],

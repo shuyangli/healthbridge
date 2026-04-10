@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -113,13 +114,7 @@ func executeReadJob(
 		return fmt.Errorf("enqueue: %w", err)
 	}
 
-	waitMs := int(wait / time.Millisecond)
-	if waitMs > relay.DefaultLongPollMs {
-		waitMs = relay.DefaultLongPollMs
-	}
-	// Even with --wait 0 we do one no-wait poll, in case the iOS app
-	// happened to drain it instantly (rare in practice; useful in tests).
-	resp, err := rc.PollResults(ctx, job.ID, waitMs)
+	resp, err := pollWithNudge(ctx, rc, job.ID, wait, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("poll results: %w", err)
 	}
