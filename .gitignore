@@ -35,3 +35,6 @@ ios/**/*.xcuserstate
 # Secrets
 secrets/
 
+# wrangler
+.wrangler/
+
