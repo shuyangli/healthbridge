@@ -20,11 +20,19 @@ export interface ApnsConfig {
 }
 
 interface CachedToken {
+  cacheKey: string;
   jwt: string;
   expiresAt: number;
 }
 
 const JWT_LIFETIME_MS = 50 * 60 * 1000; // 50 minutes (APNs max is 60)
+const APNS_ERROR_ENVIRONMENT_REASONS = new Set([
+  "BadDeviceToken",
+  "DeviceTokenNotForTopic",
+  "BadEnvironment",
+  "BadEnvironmentKeyInToken",
+  "BadEnvironmentKeyIdInToken",
+]);
 
 let cachedToken: CachedToken | null = null;
 
@@ -38,33 +46,32 @@ export async function sendSilentPush(
   config: ApnsConfig,
 ): Promise<void> {
   try {
-    const host =
-      env === "development"
-        ? "https://api.sandbox.push.apple.com"
-        : "https://api.push.apple.com";
-
     const jwt = await getOrRefreshJwt(config);
-
-    const response = await fetch(`${host}/3/device/${deviceToken}`, {
-      method: "POST",
-      headers: {
-        authorization: `bearer ${jwt}`,
-        "apns-topic": config.bundleId,
-        "apns-push-type": "background",
-        // Priority 5 = "send when convenient" — the right level for
-        // silent push. Priority 10 would require an alert.
-        "apns-priority": "5",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ aps: { "content-available": 1 } }),
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      console.error(
-        `APNs push failed: ${response.status} ${body}`,
-      );
+    const primary = await postToApns(deviceToken, env, jwt, config);
+    if (primary.response.ok) {
+      console.log(`APNs push succeeded: ${primary.response.status} env=${env}`);
+      return;
     }
+
+    const primaryLabel = `APNs push failed: status=${primary.response.status} env=${env} reason=${primary.reason ?? "unknown"} body=${primary.body}`;
+    const alternateEnv = env === "development" ? "production" : "development";
+    if (!shouldRetryWithAlternateEnvironment(primary.response.status, primary.reason)) {
+      console.error(primaryLabel);
+      return;
+    }
+
+    console.warn(`${primaryLabel} — retrying with env=${alternateEnv}`);
+    const fallback = await postToApns(deviceToken, alternateEnv, jwt, config);
+    if (fallback.response.ok) {
+      console.warn(
+        `APNs push succeeded after env retry: original=${env} fallback=${alternateEnv} status=${fallback.response.status}`,
+      );
+      return;
+    }
+
+    console.error(
+      `APNs push failed after env retry: original=${env} primary_status=${primary.response.status} primary_reason=${primary.reason ?? "unknown"} fallback_env=${alternateEnv} fallback_status=${fallback.response.status} fallback_reason=${fallback.reason ?? "unknown"} fallback_body=${fallback.body}`,
+    );
   } catch (err) {
     console.error("APNs push error:", err);
   }
@@ -72,11 +79,16 @@ export async function sendSilentPush(
 
 async function getOrRefreshJwt(config: ApnsConfig): Promise<string> {
   const now = Date.now();
-  if (cachedToken && now < cachedToken.expiresAt) {
+  const cacheKey = jwtCacheKey(config);
+  if (
+    cachedToken &&
+    cachedToken.cacheKey === cacheKey &&
+    now < cachedToken.expiresAt
+  ) {
     return cachedToken.jwt;
   }
   const jwt = await signJwt(config, now);
-  cachedToken = { jwt, expiresAt: now + JWT_LIFETIME_MS };
+  cachedToken = { cacheKey, jwt, expiresAt: now + JWT_LIFETIME_MS };
   return jwt;
 }
 
@@ -105,12 +117,9 @@ async function signJwt(config: ApnsConfig, nowMs: number): Promise<string> {
   return `${signingInput}.${base64url(signature)}`;
 }
 
-async function importPrivateKey(pem: string): Promise<CryptoKey> {
+async function importPrivateKey(pem: string): Promise<any> {
   // Strip PEM headers/footers and whitespace.
-  const cleaned = pem
-    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
-    .replace(/-----END PRIVATE KEY-----/g, "")
-    .replace(/\s/g, "");
+  const cleaned = normalizePem(pem);
   const der = Uint8Array.from(atob(cleaned), (c) => c.charCodeAt(0));
   return crypto.subtle.importKey(
     "pkcs8",
@@ -120,6 +129,78 @@ async function importPrivateKey(pem: string): Promise<CryptoKey> {
     ["sign"],
   );
 }
+
+function jwtCacheKey(config: ApnsConfig): string {
+  return [
+    config.keyId,
+    config.teamId,
+    config.bundleId,
+    normalizePem(config.authKey),
+  ].join(":");
+}
+
+function normalizePem(pem: string): string {
+  return pem
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s/g, "");
+}
+
+function hostForEnvironment(env: "development" | "production"): string {
+  return env === "development"
+    ? "https://api.sandbox.push.apple.com"
+    : "https://api.push.apple.com";
+}
+
+async function postToApns(
+  deviceToken: string,
+  env: "development" | "production",
+  jwt: string,
+  config: ApnsConfig,
+): Promise<{ response: Response; body: string; reason?: string }> {
+  const response = await fetch(`${hostForEnvironment(env)}/3/device/${deviceToken}`, {
+    method: "POST",
+    headers: {
+      authorization: `bearer ${jwt}`,
+      "apns-topic": config.bundleId,
+      "apns-push-type": "background",
+      // Priority 5 = "send when convenient" — the right level for
+      // silent push. Priority 10 would require an alert.
+      "apns-priority": "5",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ aps: { "content-available": 1 } }),
+  });
+  const body = await response.text().catch(() => "");
+  return { response, body, reason: parseApnsReason(body) };
+}
+
+function parseApnsReason(body: string): string | undefined {
+  if (!body) return undefined;
+  try {
+    const parsed = JSON.parse(body) as { reason?: unknown };
+    return typeof parsed.reason === "string" ? parsed.reason : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldRetryWithAlternateEnvironment(status: number, reason?: string): boolean {
+  if (status !== 400 && status !== 403) {
+    return false;
+  }
+  return reason !== undefined && APNS_ERROR_ENVIRONMENT_REASONS.has(reason);
+}
+
+export const __test = {
+  getOrRefreshJwt,
+  hostForEnvironment,
+  parseApnsReason,
+  shouldRetryWithAlternateEnvironment,
+  resetCache() {
+    cachedToken = null;
+  },
+};
 
 function base64url(input: string | ArrayBuffer): string {
   let bytes: Uint8Array;

@@ -31,7 +31,9 @@ export default {
 
     const id = env.PAIR_DO.idFromName(pair);
     const stub = env.PAIR_DO.get(id);
-    return stub.fetch(request);
+    const response = await stub.fetch(request);
+    console.log(`${request.method} ${url.pathname} pair=${pair} → ${response.status}`);
+    return response;
   },
 };
 

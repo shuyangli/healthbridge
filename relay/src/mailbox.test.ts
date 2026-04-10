@@ -455,8 +455,8 @@ describe("Mailbox.snapshot persistence filter", () => {
     mb.postResult("read-1", 0, "huge", false);
     const inMem = mb.inMemorySnapshot();
     expect(inMem.results).toHaveLength(1);
-    expect(inMem.results[0].persistent).toBe(false);
-    expect(inMem.results[0].blob).toBe("huge");
+    expect(inMem.results[0]!.persistent).toBe(false);
+    expect(inMem.results[0]!.blob).toBe("huge");
   });
 
   it("restoring a snapshot then snapshotting again is stable", () => {
@@ -492,7 +492,7 @@ describe("Mailbox.snapshot persistence filter", () => {
     });
     const snap = mb.snapshot();
     expect(snap.results).toHaveLength(1);
-    expect(snap.results[0].persistent).toBe(true);
+    expect(snap.results[0]!.persistent).toBe(true);
   });
 });
 

@@ -14,3 +14,12 @@ class_name = "PairMailboxDO"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["PairMailboxDO"]
+
+[observability]
+
+[observability.logs]
+enabled = false
+invocation_logs = true
+
+[observability.traces]
+enabled = false

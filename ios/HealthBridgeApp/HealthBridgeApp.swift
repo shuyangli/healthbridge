@@ -221,6 +221,21 @@ final class AppCoordinator: ObservableObject {
         log.info("HKHealthStore.requestAuthorization completed without throwing")
     }
 
+    /// The APNs environment matching the aps-environment entitlement.
+    /// Debug builds (Xcode → device) use sandbox; Release builds
+    /// (App Store / TestFlight) use production. This must match the
+    /// entitlement so we hit the same APNs server that issued the
+    /// device token.
+    private static func apnsEnvironment() -> String {
+        #if DEBUG
+        let env = "development"
+        #else
+        let env = "production"
+        #endif
+        log.info("APNs environment: \(env, privacy: .public)")
+        return env
+    }
+
     // MARK: - Drain loop
 
     func startDrainLoopIfNeeded() {
@@ -262,11 +277,7 @@ final class AppCoordinator: ObservableObject {
             pairID: pair.pairID,
             authToken: pair.authToken
         )
-        #if DEBUG
-        let env = "development"
-        #else
-        let env = "production"
-        #endif
+        let env = Self.apnsEnvironment()
         do {
             try await client.registerDeviceToken(tokenHex, environment: env)
             log.info("device token registered with relay")

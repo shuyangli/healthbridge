@@ -130,9 +130,16 @@ export class PairMailboxDO {
    */
   private maybeSendPush() {
     const pair = this.mailbox.getPair();
-    if (!pair.deviceToken || !pair.deviceTokenEnv) return;
+    if (!pair.deviceToken || !pair.deviceTokenEnv) {
+      console.log("maybeSendPush: no device token registered — skipping");
+      return;
+    }
     const config = this.apnsConfig();
-    if (!config) return;
+    if (!config) {
+      console.log("maybeSendPush: APNs config incomplete — skipping");
+      return;
+    }
+    console.log(`maybeSendPush: sending to ${pair.deviceToken.slice(0, 8)}… env=${pair.deviceTokenEnv}`);
     // waitUntil keeps the DO alive for the outbound fetch without
     // blocking the response to the CLI.
     this.state.waitUntil(
@@ -145,11 +152,14 @@ export class PairMailboxDO {
   }
 
   private apnsConfig(): ApnsConfig | null {
-    const authKey = this.env.APNS_AUTH_KEY;
-    const keyId = this.env.APNS_KEY_ID;
-    const teamId = this.env.APNS_TEAM_ID;
-    const bundleId = this.env.APNS_BUNDLE_ID;
-    if (!authKey || !keyId || !teamId || !bundleId) return null;
+    const authKey = (this.env.APNS_AUTH_KEY as string | undefined)?.trim();
+    const keyId = (this.env.APNS_KEY_ID as string | undefined)?.trim();
+    const teamId = (this.env.APNS_TEAM_ID as string | undefined)?.trim();
+    const bundleId = (this.env.APNS_BUNDLE_ID as string | undefined)?.trim();
+    if (!authKey || !keyId || !teamId || !bundleId) {
+      console.log(`maybeSendPush: missing secrets — key=${!!authKey} keyId=${!!keyId} teamId=${!!teamId} bundleId=${!!bundleId}`);
+      return null;
+    }
     return { authKey, keyId, teamId, bundleId };
   }
 
