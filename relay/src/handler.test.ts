@@ -353,6 +353,65 @@ describe("DELETE /v1/jobs", () => {
   });
 });
 
+describe("POST /v1/device-token", () => {
+  it("stores token and env in pair state", async () => {
+    const mb = newMailbox();
+    const { status, body } = await call(
+      "POST",
+      "/v1/device-token",
+      { token: "aabbccdd", env: "development" },
+      mb,
+    );
+    expect(status).toBe(200);
+    expect(body).toEqual({ ok: true });
+    const pair = mb.getPair();
+    expect(pair.deviceToken).toBe("aabbccdd");
+    expect(pair.deviceTokenEnv).toBe("development");
+  });
+
+  it("rejects missing token", async () => {
+    const { status, body } = await call(
+      "POST",
+      "/v1/device-token",
+      { env: "development" },
+    );
+    expect(status).toBe(400);
+    expect(body.code).toBe("missing_token");
+  });
+
+  it("rejects invalid env", async () => {
+    const { status, body } = await call(
+      "POST",
+      "/v1/device-token",
+      { token: "aabb", env: "staging" },
+    );
+    expect(status).toBe(400);
+    expect(body.code).toBe("invalid_env");
+  });
+
+  it("requires auth", async () => {
+    const mb = newMailbox();
+    const { status, body } = await call(
+      "POST",
+      "/v1/device-token",
+      { token: "aabb", env: "development" },
+      mb,
+      null,
+    );
+    expect(status).toBe(401);
+    expect(body.code).toBe("missing_auth");
+  });
+
+  it("overwrites previous token on re-register", async () => {
+    const mb = newMailbox();
+    await call("POST", "/v1/device-token", { token: "old", env: "development" }, mb);
+    await call("POST", "/v1/device-token", { token: "new", env: "production" }, mb);
+    const pair = mb.getPair();
+    expect(pair.deviceToken).toBe("new");
+    expect(pair.deviceTokenEnv).toBe("production");
+  });
+});
+
 describe("DELETE /v1/results", () => {
   it("removes only the result pages and leaves any unrelated inbound jobs alone", async () => {
     const mb = newMailbox();

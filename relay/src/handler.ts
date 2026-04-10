@@ -64,6 +64,9 @@ export async function handleRequest(
       return errorResponse(403, "bad_auth", "auth token does not match this pair");
     }
 
+    if (path === "/v1/device-token" && method === "POST") {
+      return await postDeviceToken(request, mailbox);
+    }
     if (path === "/v1/jobs" && method === "POST") {
       return await postJob(request, mailbox);
     }
@@ -215,6 +218,14 @@ async function postPair(request: Request, mailbox: Mailbox): Promise<Response> {
     auth_token: state.authToken ?? null,
     completed_at: state.completedAt ?? null,
   });
+}
+
+async function postDeviceToken(request: Request, mailbox: Mailbox): Promise<Response> {
+  const body = await readJson<{ token?: unknown; env?: unknown }>(request);
+  const token = requireString(body.token, "token");
+  const env = requireString(body.env, "env");
+  mailbox.registerDeviceToken(token, env);
+  return jsonResponse(200, { ok: true });
 }
 
 async function getPair(url: URL, mailbox: Mailbox, longPollMs: number): Promise<Response> {

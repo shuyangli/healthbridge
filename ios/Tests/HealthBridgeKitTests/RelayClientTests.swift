@@ -147,6 +147,20 @@ final class RelayClientTests: XCTestCase {
         XCTAssertNil(capturedAuth)
     }
 
+    func testRegisterDeviceTokenSendsExpectedBody() async throws {
+        MockURLProtocol.handler = { req in
+            XCTAssertEqual(req.httpMethod, "POST")
+            XCTAssertTrue(req.url!.absoluteString.contains("/v1/device-token"))
+            let body = try JSONSerialization.jsonObject(with: req.bodyStreamData() ?? Data()) as! [String: Any]
+            XCTAssertEqual(body["token"] as? String, "aabbccdd")
+            XCTAssertEqual(body["env"] as? String, "development")
+            let data = try JSONSerialization.data(withJSONObject: ["ok": true])
+            return (HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, data)
+        }
+        let client = newClient()
+        try await client.registerDeviceToken("aabbccdd", environment: "development")
+    }
+
     func testRelayErrorIsThrown() async {
         MockURLProtocol.handler = { req in
             let payload: [String: Any] = ["code": "mailbox_full", "message": "x"]

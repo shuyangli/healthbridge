@@ -31,3 +31,7 @@ ios/**/*.xcuserstate
 .idea/
 *.swp
 .envrc
+
+# Secrets
+secrets/
+

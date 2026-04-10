@@ -47,6 +47,10 @@ export interface PairState {
   authToken?: string;
   /** ms timestamp of when the second pubkey was committed. */
   completedAt?: number;
+  /** APNs device token (hex-encoded, posted by iOS after pairing). */
+  deviceToken?: string;
+  /** APNs environment: "development" or "production". */
+  deviceTokenEnv?: string;
 }
 
 /**
@@ -251,6 +255,18 @@ export class Mailbox {
   /** Read the current pair state. Used by both sides to retrieve the auth_token. */
   getPair(): PairState {
     return structuredClone(this.pair);
+  }
+
+  /** Store the iOS device's APNs token so the relay can push on enqueue. */
+  registerDeviceToken(token: string, env: string) {
+    if (typeof token !== "string" || token.length === 0) {
+      throw new MailboxError("invalid_token", "token required");
+    }
+    if (env !== "development" && env !== "production") {
+      throw new MailboxError("invalid_env", "env must be 'development' or 'production'");
+    }
+    this.pair.deviceToken = token;
+    this.pair.deviceTokenEnv = env;
   }
 
   /**

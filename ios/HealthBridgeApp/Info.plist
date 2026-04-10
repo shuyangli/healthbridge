@@ -28,6 +28,10 @@
 	<string>HealthBridge shares the Health data you select with the AI agent running on your paired Mac. Nothing is sent to a third-party server in plaintext — all data is end-to-end encrypted between this phone and your Mac via the relay.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>HealthBridge writes nutrition, water, and other entries on behalf of the AI agent on your paired Mac, for the data types you authorise.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>

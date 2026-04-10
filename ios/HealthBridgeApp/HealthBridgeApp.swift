@@ -20,6 +20,7 @@ private let log = Logger(subsystem: "li.shuyang.healthbridge", category: "auth")
 
 @main
 struct HealthBridgeApp: App {
+    @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @StateObject private var coordinator = AppCoordinator()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -35,6 +36,59 @@ struct HealthBridgeApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     coordinator.scenePhaseChanged(phase)
                 }
+                .onAppear {
+                    appDelegate.coordinator = coordinator
+                }
+        }
+    }
+}
+
+// MARK: - AppDelegate (push notification plumbing)
+
+/// UIKit AppDelegate adapter for receiving APNs device tokens and
+/// silent push callbacks. SwiftUI has no native equivalent for
+/// `didRegisterForRemoteNotificationsWithDeviceToken` or
+/// `didReceiveRemoteNotification:fetchCompletionHandler:`.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Set by HealthBridgeApp.onAppear so the delegate can kick the
+    /// drain loop on silent push.
+    weak var coordinator: AppCoordinator?
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        log.info("APNs device token received (\(hex.prefix(8), privacy: .public)…)")
+        Task { @MainActor in
+            await self.coordinator?.didReceiveDeviceToken(hex)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        log.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
+    }
+
+    /// Silent push handler — iOS calls this when a `content-available: 1`
+    /// push arrives. We kick the drain loop (which is a no-op if it's
+    /// already running) and call the completion handler when the first
+    /// poll returns so iOS credits us for finishing fast.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        log.info("silent push received")
+        Task { @MainActor in
+            guard let coordinator = self.coordinator else {
+                completionHandler(.noData)
+                return
+            }
+            let drained = await coordinator.drainOnPush()
+            completionHandler(drained ? .newData : .noData)
         }
     }
 }
@@ -80,6 +134,10 @@ final class AppCoordinator: ObservableObject {
             if case .unknown = auth {
                 requestAuthorizationFromUser()
             }
+            // Re-register on every foreground in case the token rotated.
+            if pair != nil {
+                UIApplication.shared.registerForRemoteNotifications()
+            }
             if case .authorized = auth, pair != nil {
                 startDrainLoopIfNeeded()
             }
@@ -95,6 +153,8 @@ final class AppCoordinator: ObservableObject {
     func pairingCompleted(_ stored: StoredPair) {
         log.info("pairingCompleted pair_id=\(stored.pairID, privacy: .public)")
         self.pair = stored
+        // Register for silent push so the relay can wake us on new jobs.
+        UIApplication.shared.registerForRemoteNotifications()
         // If HealthKit is already authorised, kick off the drain loop
         // immediately. Otherwise the user still needs to tap "Connect
         // to HealthKit" first.
@@ -186,7 +246,90 @@ final class AppCoordinator: ObservableObject {
         drainTask?.cancel()
         drainTask = nil
         if case .authorized = auth, pair != nil {
-            status = "Backgrounded — open the app to keep draining."
+            status = "Backgrounded — waiting for push."
+        }
+    }
+
+    // MARK: - Push notifications
+
+    /// Called by AppDelegate when APNs hands us a device token.
+    /// Posts it to the relay so the relay can send us silent pushes.
+    func didReceiveDeviceToken(_ tokenHex: String) async {
+        guard let pair = self.pair,
+              let relayURL = URL(string: pair.relayURL) else { return }
+        let client = RelayClient(
+            baseURL: relayURL,
+            pairID: pair.pairID,
+            authToken: pair.authToken
+        )
+        #if DEBUG
+        let env = "development"
+        #else
+        let env = "production"
+        #endif
+        do {
+            try await client.registerDeviceToken(tokenHex, environment: env)
+            log.info("device token registered with relay")
+        } catch {
+            log.error("failed to register device token: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Called by AppDelegate on silent push. Runs one drain pass
+    /// (non-long-poll) and returns whether any jobs were processed.
+    /// The caller passes the result to the UIKit completion handler
+    /// so iOS knows whether we fetched anything.
+    func drainOnPush() async -> Bool {
+        guard case .authorized = auth,
+              let pair = self.pair else { return false }
+        // If the foreground drain loop is already running, it will pick
+        // up the new job via its long-poll. Just return true so the
+        // completion handler signals newData (the loop is active).
+        if drainTask != nil { return true }
+        // Background: do a single non-blocking poll and drain whatever
+        // is there. iOS gives us ~30s; a single poll + execute cycle
+        // is well within that budget.
+        guard let relayURL = URL(string: pair.relayURL),
+              let keyBytes = Data(hexString: pair.sessionKeyHex),
+              keyBytes.count == 32 else { return false }
+        let session = JobsSession(
+            key: CryptoKit.SymmetricKey(data: keyBytes),
+            pairID: pair.pairID
+        )
+        let client = RelayClient(
+            baseURL: relayURL,
+            pairID: pair.pairID,
+            authToken: pair.authToken
+        )
+        var cursor = pair.lastDrainedMs
+        if cursor == 0 {
+            cursor = Int64(Date().timeIntervalSince1970 * 1000)
+            self.advanceCursor(to: cursor)
+        }
+        do {
+            // waitMs=0: return immediately with whatever is queued.
+            let page = try await client.pollJobs(sinceMs: cursor, waitMs: 0)
+            var drained = false
+            for jb in page.jobs {
+                let outcome = await self.processOneJob(
+                    jb: jb, session: session, client: client
+                )
+                switch outcome {
+                case .processed, .skipped:
+                    cursor = jb.enqueuedAt
+                    self.advanceCursor(to: jb.enqueuedAt)
+                    drained = true
+                case .transient:
+                    break
+                }
+            }
+            if page.nextCursorMs > cursor {
+                self.advanceCursor(to: page.nextCursorMs)
+            }
+            return drained
+        } catch {
+            log.error("drainOnPush failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

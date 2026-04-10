@@ -32,6 +32,7 @@
 
 import { Mailbox } from "./mailbox.js";
 import { handleRequest } from "./handler.js";
+import { sendSilentPush, type ApnsConfig } from "./apns.js";
 
 const SNAPSHOT_KEY = "snapshot_v3";
 const LEGACY_V1_KEY = "mailbox_snapshot_v1";
@@ -45,7 +46,7 @@ export class PairMailboxDO {
   private mailbox = new Mailbox();
   private loaded = false;
 
-  constructor(private state: any, private env: unknown) {}
+  constructor(private state: any, private env: any) {}
 
   private async ensureLoaded() {
     if (this.loaded) return;
@@ -122,6 +123,36 @@ export class PairMailboxDO {
     await this.state.storage.put(SNAPSHOT_KEY, snap);
   }
 
+  /**
+   * Fire-and-forget silent push to the iOS device. Called after a
+   * successful job enqueue. If any APNs secret is missing, or no
+   * device token is registered, this is a no-op.
+   */
+  private maybeSendPush() {
+    const pair = this.mailbox.getPair();
+    if (!pair.deviceToken || !pair.deviceTokenEnv) return;
+    const config = this.apnsConfig();
+    if (!config) return;
+    // waitUntil keeps the DO alive for the outbound fetch without
+    // blocking the response to the CLI.
+    this.state.waitUntil(
+      sendSilentPush(
+        pair.deviceToken,
+        pair.deviceTokenEnv as "development" | "production",
+        config,
+      ),
+    );
+  }
+
+  private apnsConfig(): ApnsConfig | null {
+    const authKey = this.env.APNS_AUTH_KEY;
+    const keyId = this.env.APNS_KEY_ID;
+    const teamId = this.env.APNS_TEAM_ID;
+    const bundleId = this.env.APNS_BUNDLE_ID;
+    if (!authKey || !keyId || !teamId || !bundleId) return null;
+    return { authKey, keyId, teamId, bundleId };
+  }
+
   private async ensureAlarmScheduled() {
     try {
       const current = await this.state.storage.getAlarm();
@@ -166,6 +197,10 @@ export class PairMailboxDO {
   async fetch(request: Request): Promise<Response> {
     try {
       await this.ensureLoaded();
+      const url = new URL(request.url);
+      const isJobEnqueue =
+        request.method === "POST" && url.pathname === "/v1/jobs";
+
       const response = await handleRequest(request, this.mailbox);
       // Persist after every state-mutating method. Reads don't change state.
       if (request.method !== "GET") {
@@ -179,6 +214,14 @@ export class PairMailboxDO {
           console.error("PairMailboxDO: persist failed:", err);
         }
       }
+
+      // Fire a silent push after a successful job enqueue so the iOS
+      // app wakes immediately instead of waiting for its next long-poll.
+      // Best-effort: failures are logged but never block the response.
+      if (isJobEnqueue && response.status === 201) {
+        this.maybeSendPush();
+      }
+
       return response;
     } catch (err) {
       // Defensive top-level catch. handleRequest already converts

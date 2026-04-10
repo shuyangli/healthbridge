@@ -175,6 +175,18 @@ public actor RelayClient {
         )
     }
 
+    /// Register (or update) the APNs device token for this pair so the
+    /// relay can send a silent push when a new job is enqueued.
+    public func registerDeviceToken(_ tokenHex: String, environment: String) async throws {
+        let body = DeviceTokenRequest(token: tokenHex, env: environment)
+        let _: Empty = try await request(method: "POST", path: "/v1/device-token", query: [:], body: body)
+    }
+
+    private struct DeviceTokenRequest: Encodable {
+        let token: String
+        let env: String
+    }
+
     public func revokePair() async throws {
         let _: Empty = try await request(method: "DELETE", path: "/v1/pair", query: [:], body: Optional<Empty>.none)
     }

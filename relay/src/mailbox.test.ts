@@ -495,3 +495,46 @@ describe("Mailbox.snapshot persistence filter", () => {
     expect(snap.results[0].persistent).toBe(true);
   });
 });
+
+describe("Mailbox.registerDeviceToken", () => {
+  it("stores token and env in pair state", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.registerDeviceToken("aabbccdd", "development");
+    const pair = mb.getPair();
+    expect(pair.deviceToken).toBe("aabbccdd");
+    expect(pair.deviceTokenEnv).toBe("development");
+  });
+
+  it("overwrites on re-register", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.registerDeviceToken("old", "development");
+    mb.registerDeviceToken("new", "production");
+    const pair = mb.getPair();
+    expect(pair.deviceToken).toBe("new");
+    expect(pair.deviceTokenEnv).toBe("production");
+  });
+
+  it("rejects empty token", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    expectMailboxError(() => mb.registerDeviceToken("", "development"), "invalid_token");
+  });
+
+  it("rejects invalid env", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    expectMailboxError(() => mb.registerDeviceToken("aabb", "staging"), "invalid_env");
+  });
+
+  it("device token survives snapshot/restore", () => {
+    const mb = new Mailbox(fakeDeps(0));
+    mb.registerDeviceToken("aabbccdd", "production");
+    const snap = mb.snapshot();
+    expect(snap.pair.deviceToken).toBe("aabbccdd");
+    expect(snap.pair.deviceTokenEnv).toBe("production");
+
+    const mb2 = new Mailbox(fakeDeps(0));
+    mb2.restore({ jobs: [], results: [], nextSeq: 1, pair: snap.pair });
+    const pair = mb2.getPair();
+    expect(pair.deviceToken).toBe("aabbccdd");
+    expect(pair.deviceTokenEnv).toBe("production");
+  });
+});
