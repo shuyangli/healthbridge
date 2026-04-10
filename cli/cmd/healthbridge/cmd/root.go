@@ -38,6 +38,7 @@ func Root() *cobra.Command {
 	root.AddCommand(newTypesCmd())
 	root.AddCommand(newProfileCmd())
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newUpgradeCmd())
 	return root
 }
 
