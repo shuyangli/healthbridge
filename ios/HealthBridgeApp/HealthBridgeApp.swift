@@ -21,7 +21,7 @@ private let log = Logger(subsystem: "li.shuyang.healthbridge", category: "auth")
 @main
 struct HealthBridgeApp: App {
     @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
-    @StateObject private var coordinator = AppCoordinator()
+    @StateObject private var coordinator = AppCoordinator.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -36,9 +36,6 @@ struct HealthBridgeApp: App {
                 .onChange(of: scenePhase) { _, phase in
                     coordinator.scenePhaseChanged(phase)
                 }
-                .onAppear {
-                    appDelegate.coordinator = coordinator
-                }
         }
     }
 }
@@ -49,10 +46,12 @@ struct HealthBridgeApp: App {
 /// silent push callbacks. SwiftUI has no native equivalent for
 /// `didRegisterForRemoteNotificationsWithDeviceToken` or
 /// `didReceiveRemoteNotification:fetchCompletionHandler:`.
+@MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
-    /// Set by HealthBridgeApp.onAppear so the delegate can kick the
-    /// drain loop on silent push.
-    weak var coordinator: AppCoordinator?
+    /// Use the shared coordinator so silent-push wakes still have
+    /// access to pairing and auth state even if no SwiftUI view has
+    /// appeared in this process yet.
+    private let coordinator = AppCoordinator.shared
 
     func application(
         _ application: UIApplication,
@@ -61,7 +60,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         log.info("APNs device token received (\(hex.prefix(8), privacy: .public)…)")
         Task { @MainActor in
-            await self.coordinator?.didReceiveDeviceToken(hex)
+            await self.coordinator.didReceiveDeviceToken(hex)
         }
     }
 
@@ -81,13 +80,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        log.info("silent push received")
         Task { @MainActor in
-            guard let coordinator = self.coordinator else {
-                completionHandler(.noData)
-                return
-            }
-            let drained = await coordinator.drainOnPush()
+            let drained = await self.coordinator.drainOnPush()
             completionHandler(drained ? .newData : .noData)
         }
     }
@@ -95,6 +89,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
 @MainActor
 final class AppCoordinator: ObservableObject {
+    static let shared = AppCoordinator()
 
     enum AuthState: Equatable {
         case unknown
@@ -114,9 +109,11 @@ final class AppCoordinator: ObservableObject {
 
     private var drainTask: Task<Void, Never>?
     private let store = HKHealthStore()
+    private let authStateStore = AuthStateStore()
 
     init() {
         self.pair = PairStorage.load()
+        self.auth = authStateStore.load()
     }
 
     // MARK: - Lifecycle
@@ -196,6 +193,7 @@ final class AppCoordinator: ObservableObject {
             do {
                 try await self.requestAuthorization()
                 self.auth = .authorized
+                self.authStateStore.save(.authorized)
                 self.status = self.pair == nil
                     ? "Connected — pair with your Mac to start draining."
                     : "Connected — draining relay"
@@ -205,6 +203,7 @@ final class AppCoordinator: ObservableObject {
                 }
             } catch {
                 self.auth = .denied("\(error)")
+                self.authStateStore.save(self.auth)
                 self.lastError = "\(error)"
                 self.status = "HealthKit permission failed: \(error.localizedDescription)"
                 log.error("requestAuthorization threw: \(error.localizedDescription, privacy: .public)")
@@ -271,7 +270,10 @@ final class AppCoordinator: ObservableObject {
     /// Posts it to the relay so the relay can send us silent pushes.
     func didReceiveDeviceToken(_ tokenHex: String) async {
         guard let pair = self.pair,
-              let relayURL = URL(string: pair.relayURL) else { return }
+              let relayURL = URL(string: pair.relayURL) else {
+            log.error("didReceiveDeviceToken skipped: missing pair or relayURL")
+            return
+        }
         let client = RelayClient(
             baseURL: relayURL,
             pairID: pair.pairID,
@@ -291,12 +293,21 @@ final class AppCoordinator: ObservableObject {
     /// The caller passes the result to the UIKit completion handler
     /// so iOS knows whether we fetched anything.
     func drainOnPush() async -> Bool {
-        guard case .authorized = auth,
-              let pair = self.pair else { return false }
+        guard case .authorized = auth else {
+            log.info("drainOnPush skipped: auth=\(String(describing: self.auth), privacy: .public)")
+            return false
+        }
+        guard let pair = self.pair else {
+            log.info("drainOnPush skipped: no pair")
+            return false
+        }
         // If the foreground drain loop is already running, it will pick
         // up the new job via its long-poll. Just return true so the
         // completion handler signals newData (the loop is active).
-        if drainTask != nil { return true }
+        if drainTask != nil {
+            log.info("drainOnPush: foreground drain loop already active")
+            return true
+        }
         // Background: do a single non-blocking poll and drain whatever
         // is there. iOS gives us ~30s; a single poll + execute cycle
         // is well within that budget.
@@ -815,6 +826,45 @@ final class AppCoordinator: ObservableObject {
         try await store.save(hkSample)
         log.info("saved sample uuid=\(hkSample.uuid.uuidString, privacy: .public)")
         return hkSample.uuid.uuidString
+    }
+}
+
+private struct AuthStateStore {
+    private enum PersistedAuthState: String {
+        case unknown
+        case authorized
+        case denied
+    }
+
+    private let defaults = UserDefaults.standard
+    private let key = "healthbridge.healthkit_auth_state"
+
+    func load() -> AppCoordinator.AuthState {
+        guard let raw = defaults.string(forKey: key),
+              let persisted = PersistedAuthState(rawValue: raw) else {
+            return .unknown
+        }
+        switch persisted {
+        case .unknown:
+            return .unknown
+        case .authorized:
+            return .authorized
+        case .denied:
+            return .denied("HealthKit permission was previously denied.")
+        }
+    }
+
+    func save(_ state: AppCoordinator.AuthState) {
+        let persisted: PersistedAuthState
+        switch state {
+        case .unknown, .requesting, .unavailable:
+            persisted = .unknown
+        case .authorized:
+            persisted = .authorized
+        case .denied:
+            persisted = .denied
+        }
+        defaults.set(persisted.rawValue, forKey: key)
     }
 }
 
