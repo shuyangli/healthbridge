@@ -126,6 +126,14 @@ final class AppCoordinator: ObservableObject {
     @Published var pair: StoredPair?
 
     private var drainTask: Task<Void, Never>?
+    /// True while drainOnPush() is actively processing jobs. Prevents
+    /// startDrainLoopIfNeeded() and subsequent push callbacks from
+    /// launching a concurrent drain over the same cursor.
+    private var isDrainingOnPush = false
+    /// Set when a push arrives while isDrainingOnPush is true. The
+    /// active drain will do another pass after finishing so jobs
+    /// enqueued between pushes are picked up promptly.
+    private var pushDrainRequested = false
     private let store = HKHealthStore()
     private let authStateStore = AuthStateStore()
 
@@ -256,7 +264,7 @@ final class AppCoordinator: ObservableObject {
     // MARK: - Drain loop
 
     func startDrainLoopIfNeeded() {
-        guard drainTask == nil else { return }
+        guard drainTask == nil, !isDrainingOnPush else { return }
         guard let pair = pair else {
             log.info("startDrainLoopIfNeeded: no pair — skipping")
             return
@@ -306,7 +314,7 @@ final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Called by AppDelegate on silent push. Runs one drain pass
+    /// Called by AppDelegate on push notification. Runs one drain pass
     /// (non-long-poll) and returns whether any jobs were processed.
     /// The caller passes the result to the UIKit completion handler
     /// so iOS knows whether we fetched anything.
@@ -319,16 +327,31 @@ final class AppCoordinator: ObservableObject {
             log.info("drainOnPush skipped: no pair")
             return false
         }
-        // If the foreground drain loop is already running, it will pick
-        // up the new job via its long-poll. Just return true so the
-        // completion handler signals newData (the loop is active).
+        // If the foreground drain loop is running, it will pick up the
+        // new job via its long-poll.
         if drainTask != nil {
-            log.info("drainOnPush: foreground drain loop already active")
+            log.info("drainOnPush: foreground drain loop active")
             return true
         }
-        // Background: do a single non-blocking poll and drain whatever
-        // is there. iOS gives us ~30s; a single poll + execute cycle
-        // is well within that budget.
+        // If another push drain is active, request another pass so
+        // jobs enqueued between pushes are picked up.
+        if isDrainingOnPush {
+            log.info("drainOnPush: coalescing with active push drain")
+            pushDrainRequested = true
+            return true
+        }
+        // We own the drain. Set the flag so concurrent pushes and
+        // startDrainLoopIfNeeded() don't start a second drain.
+        isDrainingOnPush = true
+        defer {
+            isDrainingOnPush = false
+            pushDrainRequested = false
+            // If the app came to foreground while we were draining
+            // (user tapped the notification), start the long-poll
+            // drain loop now that the one-shot drain is done.
+            startDrainLoopIfNeeded()
+        }
+
         guard let relayURL = URL(string: pair.relayURL),
               let keyBytes = Data(hexString: pair.sessionKeyHex),
               keyBytes.count == 32 else { return false }
@@ -346,31 +369,36 @@ final class AppCoordinator: ObservableObject {
             cursor = Int64(Date().timeIntervalSince1970 * 1000)
             self.advanceCursor(to: cursor)
         }
-        do {
-            // waitMs=0: return immediately with whatever is queued.
-            let page = try await client.pollJobs(sinceMs: cursor, waitMs: 0)
-            var drained = false
-            for jb in page.jobs {
-                let outcome = await self.processOneJob(
-                    jb: jb, session: session, client: client
-                )
-                switch outcome {
-                case .processed, .skipped:
-                    cursor = jb.enqueuedAt
-                    self.advanceCursor(to: jb.enqueuedAt)
-                    drained = true
-                case .transient:
-                    break
+        var everDrained = false
+        // Loop: drain once, then again if more pushes arrived while
+        // we were processing. This coalesces N rapid pushes into at
+        // most 2 passes instead of N concurrent drains.
+        repeat {
+            pushDrainRequested = false
+            do {
+                let page = try await client.pollJobs(sinceMs: cursor, waitMs: 0)
+                for jb in page.jobs {
+                    let outcome = await self.processOneJob(
+                        jb: jb, session: session, client: client
+                    )
+                    switch outcome {
+                    case .processed, .skipped:
+                        cursor = jb.enqueuedAt
+                        self.advanceCursor(to: jb.enqueuedAt)
+                        everDrained = true
+                    case .transient:
+                        break
+                    }
                 }
+                if page.nextCursorMs > cursor {
+                    self.advanceCursor(to: page.nextCursorMs)
+                }
+            } catch {
+                log.error("drainOnPush failed: \(error.localizedDescription, privacy: .public)")
+                return everDrained
             }
-            if page.nextCursorMs > cursor {
-                self.advanceCursor(to: page.nextCursorMs)
-            }
-            return drained
-        } catch {
-            log.error("drainOnPush failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
+        } while pushDrainRequested
+        return everDrained
     }
 
     private func drainLoop(pair startingPair: StoredPair) async throws {
