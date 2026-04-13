@@ -11,13 +11,17 @@ public actor RelayClient {
     /// Per-pair Bearer credential issued by the relay at pair completion.
     /// Empty during the pairing flow itself; required for every other call.
     public private(set) var authToken: String
+    /// Relay-level secret that gates pairing endpoints. Empty when the
+    /// relay has no secret configured.
+    public let relaySecret: String
 
     private let session: URLSession
 
-    public init(baseURL: URL, pairID: String, authToken: String = "", session: URLSession = .shared) {
+    public init(baseURL: URL, pairID: String, authToken: String = "", relaySecret: String = "", session: URLSession = .shared) {
         self.baseURL = baseURL
         self.pairID = pairID
         self.authToken = authToken
+        self.relaySecret = relaySecret
         self.session = session
     }
 
@@ -275,6 +279,9 @@ public actor RelayClient {
         req.setValue("application/json", forHTTPHeaderField: "accept")
         if !authToken.isEmpty {
             req.setValue("Bearer \(authToken)", forHTTPHeaderField: "authorization")
+        }
+        if !relaySecret.isEmpty {
+            req.setValue(relaySecret, forHTTPHeaderField: "x-relay-secret")
         }
 
         let (data, response) = try await session.data(for: req)

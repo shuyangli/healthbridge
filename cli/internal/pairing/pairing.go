@@ -44,6 +44,10 @@ type PairLink struct {
 	// versions abort pairing rather than silently produce wrong session
 	// keys.
 	Version string `json:"v"`
+	// RelaySecret is the relay-level secret that gates pairing. Embedded
+	// in the QR so the iOS responder can present it when posting its
+	// pubkey. Omitted from JSON when empty (relay has no secret).
+	RelaySecret string `json:"relay_secret,omitempty"`
 }
 
 // protocolVersion identifies the current pairing wire format. This was
@@ -125,10 +129,11 @@ func InitiatePairing(ctx context.Context, c *relay.Client, relayURL string) (*Re
 		CLIPriv:  keys.Private,
 	}
 	link := &PairLink{
-		PairID:   c.PairID,
-		CLIPub:   hex.EncodeToString(keys.Public),
-		RelayURL: relayURL,
-		Version:  protocolVersion,
+		PairID:      c.PairID,
+		CLIPub:      hex.EncodeToString(keys.Public),
+		RelayURL:    relayURL,
+		Version:     protocolVersion,
+		RelaySecret: c.RelaySecret,
 	}
 	return r, link, nil
 }
@@ -183,6 +188,11 @@ func CompletePairing(ctx context.Context, c *relay.Client, partial *Result, wait
 func RespondPairing(ctx context.Context, c *relay.Client, link *PairLink) (*Result, error) {
 	if c.PairID != link.PairID {
 		return nil, fmt.Errorf("pairing: client pair_id %q != link pair_id %q", c.PairID, link.PairID)
+	}
+	// Adopt the relay secret from the link so the responder's POST
+	// /v1/pair call passes the relay-level gate.
+	if link.RelaySecret != "" {
+		c.RelaySecret = link.RelaySecret
 	}
 	cliPub, err := hex.DecodeString(link.CLIPub)
 	if err != nil {

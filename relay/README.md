@@ -62,6 +62,25 @@ is the value to pass as `--relay` to the CLI and to set as
 Re-deploying picks up source changes; the per-pair Durable Object
 state survives across deploys.
 
+### Relay secret (optional)
+
+By default anyone who knows your relay URL can initiate a new pairing.
+To restrict pairing to people you approve, set a relay-level secret:
+
+```sh
+# Generate a random secret and store it as a Worker secret.
+npx wrangler secret put RELAY_SECRET
+
+# Set the same value in your shell so the CLI sends it during pairing.
+export HEALTHBRIDGE_RELAY_SECRET="<same-value>"
+```
+
+When `RELAY_SECRET` is set, `POST /v1/pair` and `GET /v1/pair` require
+a matching `X-Relay-Secret` header. The CLI reads the secret from
+`HEALTHBRIDGE_RELAY_SECRET` and embeds it in the QR code so the iOS
+app sends it automatically. Post-pairing endpoints are unaffected —
+they use the per-pair Bearer token.
+
 ## API
 
 ```
@@ -73,5 +92,7 @@ DELETE /v1/pair?pair=<id>            wipe a pair
 GET    /v1/health                    liveness ping
 ```
 
-`pair` is a 26-character ULID established at pairing. M1 has no auth; M2
-adds per-pair HMAC tokens.
+`pair` is a 26-character ULID established at pairing. Pairing endpoints
+(`/v1/pair`) are optionally gated by a relay-level `X-Relay-Secret`
+header. All other endpoints require a per-pair `Authorization: Bearer`
+token issued at pairing completion.

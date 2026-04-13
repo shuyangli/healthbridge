@@ -57,7 +57,7 @@ final class PairingFlowModel: ObservableObject {
                     self.phase = .failure("Pair link contains an invalid relay URL.")
                     return
                 }
-                let client = RelayClient(baseURL: url, pairID: link.pairID)
+                let client = RelayClient(baseURL: url, pairID: link.pairID, relaySecret: link.relaySecret ?? "")
                 let result = try await HealthBridgePairing.respondPairing(client: client, link: link)
                 self.phase = .awaitingConfirmation(result)
             } catch let err as PairingError {

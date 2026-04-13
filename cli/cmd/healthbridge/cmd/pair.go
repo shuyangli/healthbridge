@@ -67,6 +67,7 @@ func runPair(c *cobra.Command, _ []string) error {
 	}
 
 	rc := relay.New(relayURL, pairID)
+	rc.RelaySecret = envOrEmpty("HEALTHBRIDGE_RELAY_SECRET")
 	ctx, cancel := withCancellableContext()
 	defer cancel()
 

@@ -35,7 +35,11 @@ type Client struct {
 	// pairing time. Empty during the pairing flow itself; required for
 	// every other endpoint after pairing has completed.
 	AuthToken string
-	HTTP      *http.Client
+	// RelaySecret is the relay-level secret that gates pairing. If set,
+	// it is sent as X-Relay-Secret on /v1/pair requests. Empty means the
+	// relay has no secret configured.
+	RelaySecret string
+	HTTP        *http.Client
 }
 
 // New constructs a Client. baseURL must include the scheme but no trailing
@@ -302,6 +306,9 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	req.Header.Set("accept", "application/json")
 	if c.AuthToken != "" {
 		req.Header.Set("authorization", "Bearer "+c.AuthToken)
+	}
+	if c.RelaySecret != "" {
+		req.Header.Set("x-relay-secret", c.RelaySecret)
 	}
 
 	resp, err := c.HTTP.Do(req)

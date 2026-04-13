@@ -23,19 +23,25 @@ public struct PairLink: Codable, Sendable, Equatable {
     public let cliPubHex: String
     public let relayURL: String
     public let version: String
+    /// Relay-level secret that gates pairing. Nil when the relay has no
+    /// secret configured. Embedded in the QR by the CLI so the iOS
+    /// responder can present it when posting its pubkey.
+    public let relaySecret: String?
 
     enum CodingKeys: String, CodingKey {
         case pairID = "pair_id"
         case cliPubHex = "cli_pub_hex"
         case relayURL = "relay_url"
         case version = "v"
+        case relaySecret = "relay_secret"
     }
 
-    public init(pairID: String, cliPubHex: String, relayURL: String, version: String = HealthBridgePairing.protocolVersion) {
+    public init(pairID: String, cliPubHex: String, relayURL: String, version: String = HealthBridgePairing.protocolVersion, relaySecret: String? = nil) {
         self.pairID = pairID
         self.cliPubHex = cliPubHex
         self.relayURL = relayURL
         self.version = version
+        self.relaySecret = relaySecret
     }
 }
 
@@ -118,7 +124,8 @@ public enum HealthBridgePairing {
         if pub.count != HealthBridgeCrypto.publicKeySize {
             throw PairingError.wrongPubkeySize
         }
-        return PairLink(pairID: pairID, cliPubHex: cliPubHex, relayURL: relayURL, version: version)
+        let relaySecret = raw["relay_secret"] as? String
+        return PairLink(pairID: pairID, cliPubHex: cliPubHex, relayURL: relayURL, version: version, relaySecret: relaySecret)
     }
 
     /// Run the iOS (responder) half of the protocol. Generates a fresh
