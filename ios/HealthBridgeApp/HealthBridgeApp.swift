@@ -124,7 +124,9 @@ final class AppCoordinator: ObservableObject {
     /// The currently-paired Mac, if any. nil = no pair on disk yet,
     /// in which case the UI shows the pairing flow.
     @Published var pair: StoredPair?
+    @Published var auditEntries: [AuditEntry] = []
 
+    let auditLog: AuditLog
     private var drainTask: Task<Void, Never>?
     /// True while drainOnPush() is actively processing jobs. Prevents
     /// startDrainLoopIfNeeded() and subsequent push callbacks from
@@ -138,8 +140,28 @@ final class AppCoordinator: ObservableObject {
     private let authStateStore = AuthStateStore()
 
     init() {
+        self.auditLog = AuditLog(fileURL: Self.auditLogURL())
         self.pair = PairStorage.load()
         self.auth = authStateStore.load()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if let entries = try? await self.auditLog.all() {
+                self.auditEntries = entries
+            }
+        }
+    }
+
+    private static func auditLogURL() -> URL {
+        let fm = FileManager.default
+        let dir = (try? fm.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )) ?? fm.temporaryDirectory
+        return dir
+            .appendingPathComponent("HealthBridge", isDirectory: true)
+            .appendingPathComponent("audit.json")
     }
 
     // MARK: - Lifecycle
@@ -508,6 +530,38 @@ final class AppCoordinator: ObservableObject {
         "too_many_result_pages",
     ]
 
+    /// Record a completed job in the audit log and update the published
+    /// entries array so the UI refreshes.
+    private func recordAuditEntry(job: Job, result: JobResult) async {
+        let kind: AuditEntry.Kind
+        switch job.kind {
+        case .read:    kind = .read
+        case .write:   kind = .write
+        case .sync:    kind = .sync
+        case .profile: return // profile jobs aren't audited
+        }
+
+        var sampleType: String?
+        switch job.kind {
+        case .read:  sampleType = (try? job.decodeReadPayload())?.type.rawValue
+        case .write: sampleType = (try? job.decodeWritePayload())?.sample.type.rawValue
+        default:     break
+        }
+
+        let entry = AuditEntry(
+            jobID: job.id,
+            kind: kind,
+            sampleType: sampleType,
+            outcome: result.status == .done ? .done : .failed,
+            errorCode: result.error?.code
+        )
+        try? await auditLog.append(entry)
+        auditEntries.append(entry)
+        if auditEntries.count > AuditLog.maxEntries {
+            auditEntries.removeFirst(auditEntries.count - AuditLog.maxEntries)
+        }
+    }
+
     private func processOneJob(
         jb: RelayClient.JobBlob,
         session: JobsSession,
@@ -557,6 +611,7 @@ final class AppCoordinator: ObservableObject {
                 persistent: persistent
             )
             self.drainedCount += 1
+            await self.recordAuditEntry(job: job, result: result)
             return .processed
         } catch let err as RelayClient.RelayError where err.code == "duplicate_result_page" {
             // We crashed (or this loop restarted) between executing
@@ -595,6 +650,7 @@ final class AppCoordinator: ObservableObject {
             } catch {
                 log.error("fallback post also failed for seq=\(jb.seq, privacy: .public): \(error.localizedDescription, privacy: .public) — advancing anyway to unwedge")
             }
+            await self.recordAuditEntry(job: job, result: fallback)
             return .processed
         } catch {
             // Network error, 5xx, anything else. Treat as transient.
@@ -954,18 +1010,10 @@ struct ContentView: View {
                     PairingView(model: makePairingModel())
                         .frame(maxHeight: .infinity)
                 } else {
-                    pairedSummary
+                    pairedView
+                        .frame(maxHeight: .infinity)
                 }
             }
-
-            if let err = coordinator.lastError {
-                Text(err)
-                    .foregroundStyle(.red)
-                    .font(.caption)
-                    .padding(.horizontal)
-            }
-
-            Spacer()
 
             Text("Keep this screen open for the agent to read your Health data.")
                 .multilineTextAlignment(.center)
@@ -976,21 +1024,30 @@ struct ContentView: View {
         .padding()
     }
 
-    private var pairedSummary: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .imageScale(.large)
-            Text("Drained \(coordinator.drainedCount) jobs")
-            if let pair = coordinator.pair {
-                Text("Paired with \(pair.pairID)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                Button("Unpair", role: .destructive) {
-                    coordinator.unpair()
+    private var pairedView: some View {
+        VStack(spacing: 0) {
+            // Header
+            VStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .imageScale(.large)
+                Text("Drained \(coordinator.drainedCount) jobs")
+                if let pair = coordinator.pair {
+                    Text("Paired with \(pair.pairID)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                    Button("Unpair", role: .destructive) {
+                        coordinator.unpair()
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.top, 4)
             }
+            .padding(.bottom, 16)
+
+            Divider()
+
+            // Activity log
+            ActivityLogView(entries: coordinator.auditEntries)
         }
     }
 
