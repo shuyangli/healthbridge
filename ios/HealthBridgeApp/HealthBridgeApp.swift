@@ -1019,28 +1019,52 @@ struct ContentView: View {
     }
 
     private var pairedView: some View {
-        VStack(spacing: 0) {
-            // Header
-            VStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .imageScale(.large)
-                Text("Drained \(coordinator.drainedCount) jobs")
-                if let pair = coordinator.pair {
-                    Text("Paired with \(pair.pairID)")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                    Button("Unpair", role: .destructive) {
-                        coordinator.unpair()
-                    }
-                    .padding(.top, 4)
+        TabView {
+            logTab
+                .tabItem {
+                    Label("Log", systemImage: "list.bullet")
                 }
+
+            SettingsView(onUnpair: { coordinator.unpair() })
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
+        }
+    }
+
+    private var logTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Title
+            Text("HealthBridge")
+                .font(.title.bold())
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+
+            // Status banner
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 8, height: 8)
+                Text("STATUS: CONNECTED")
+                    .font(.system(size: 12, weight: .semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(.green)
             }
-            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color.green.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
 
-            Divider()
+            // Section header
+            Text("Activity Log")
+                .font(.title3.bold())
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 8)
 
-            // Activity log
+            // Log entries
             ActivityLogView(entries: coordinator.auditEntries)
         }
     }
