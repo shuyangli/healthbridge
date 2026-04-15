@@ -28,7 +28,6 @@ func Root() *cobra.Command {
 	root.AddCommand(newReadCmd())
 	root.AddCommand(newWriteCmd())
 	root.AddCommand(newPairCmd())
-	root.AddCommand(newScopesCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newJobsCmd())
 	root.AddCommand(newSyncCmd())
@@ -44,12 +43,10 @@ func Root() *cobra.Command {
 
 const rootLong = `healthbridge is the desktop CLI for the HealthBridge project.
 
-It encodes a job (read, write, or sync), pushes it to a tiny serverless
-relay, and waits for the iOS HealthBridge app to drain it the next time
-the user opens the phone. Every job and result that crosses the relay is
-end-to-end encrypted (M2+); the relay is a dumb mailbox.
-
-In M1 only ` + "`read`" + ` is supported, and blobs are plaintext base64.`
+It encodes a job (read, write, or sync), pushes it to a relay, and waits
+for the iOS HealthBridge app to drain it when the notification is processed
+or the user opens their app. Every job and result that crosses the relay is
+end-to-end encrypted.`
 
 // localDevRelayURL is the fallback the CLI uses when no other source
 // names a relay. Lives here as a named constant so commonFromCmd can

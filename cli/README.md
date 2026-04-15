@@ -133,7 +133,6 @@ healthbridge write   <type> --value <n> --unit <u> [--at <t>] [--meta k=v]
 healthbridge sync    [--type <t>...] [--full]
 healthbridge jobs    list|get|wait|cancel|prune
 healthbridge status
-healthbridge scopes  list|grant|revoke
 healthbridge types
 healthbridge pair
 healthbridge wipe    [--yes]

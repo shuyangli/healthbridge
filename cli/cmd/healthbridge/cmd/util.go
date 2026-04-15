@@ -148,6 +148,23 @@ func withCancellableContext() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
 
+// loadPairRecord loads the pair record for the --pair flag. Returns a
+// friendly error if the record does not exist.
+func loadPairRecord(c *cobra.Command) (*config.PairRecord, error) {
+	flags, err := commonFromCmd(c)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := config.LoadPair(configDir(), flags.PairID)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no pair record for %s — run `healthbridge pair` first", flags.PairID)
+		}
+		return nil, err
+	}
+	return rec, nil
+}
+
 // ackResult tells the relay we're done with a job's result pages so
 // it can prune them now instead of waiting for the 24h TTL eviction.
 // Best-effort: any failure (network, relay down, the entries already

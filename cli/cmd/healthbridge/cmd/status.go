@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -14,10 +13,9 @@ import (
 func newStatusCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "status",
-		Short: "Show pair info, scopes, and relay reachability",
+		Short: "Show pair info and relay reachability",
 		Long: `Reads the local pair record for --pair, prints the relay URL,
-granted scopes, and pings the relay's /v1/health endpoint to confirm
-it's reachable.
+and pings the relay's /v1/health endpoint to confirm it's reachable.
 
 In M4+ this also reports queue depth and last sync timestamps.`,
 		RunE: runStatus,
@@ -51,7 +49,6 @@ func runStatus(c *cobra.Command, _ []string) error {
 		return writeJSON(out, map[string]any{
 			"pair_id":   rec.PairID,
 			"relay_url": rec.RelayURL,
-			"scopes":    rec.Scopes,
 			"created":   rec.CreatedAt,
 			"relay_ok":  relayOK,
 			"relay_err": relayErr,
@@ -59,11 +56,6 @@ func runStatus(c *cobra.Command, _ []string) error {
 	}
 	fmt.Fprintf(out, "pair_id  : %s\n", rec.PairID)
 	fmt.Fprintf(out, "relay    : %s\n", rec.RelayURL)
-	if len(rec.Scopes) == 0 {
-		fmt.Fprintln(out, "scopes   : (all sample types)")
-	} else {
-		fmt.Fprintf(out, "scopes   : %s\n", strings.Join(rec.Scopes, ", "))
-	}
 	fmt.Fprintf(out, "created  : %s\n", rec.CreatedAt.Format("2006-01-02 15:04:05 MST"))
 	if relayOK {
 		fmt.Fprintln(out, "relay_ok : yes")

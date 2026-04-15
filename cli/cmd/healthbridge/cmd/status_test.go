@@ -36,7 +36,6 @@ func TestStatusHumanOutput(t *testing.T) {
 		RelayURL:   relayURL,
 		AuthToken:  "tok",
 		SessionKey: bytes.Repeat([]byte{0xab}, crypto.SessionKeySize),
-		Scopes:     []string{"step_count", "dietary_energy_consumed"},
 	}
 	if err := config.SavePair(dir, rec); err != nil {
 		t.Fatal(err)
@@ -52,7 +51,7 @@ func TestStatusHumanOutput(t *testing.T) {
 		t.Fatalf("status: %v\n%s", err, buf.String())
 	}
 	out := buf.String()
-	for _, want := range []string{rec.PairID, relayURL, "step_count", "dietary_energy_consumed", "relay_ok : yes"} {
+	for _, want := range []string{rec.PairID, relayURL, "relay_ok : yes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status output missing %q\noutput:\n%s", want, out)
 		}
@@ -92,7 +91,6 @@ func TestStatusJSONOutput(t *testing.T) {
 		PairID:     "01J9ZX0PAIR000000000000042",
 		RelayURL:   relayURL,
 		SessionKey: bytes.Repeat([]byte{0xab}, crypto.SessionKeySize),
-		Scopes:     []string{"step_count"},
 	}
 	if err := config.SavePair(dir, rec); err != nil {
 		t.Fatal(err)
