@@ -125,22 +125,9 @@ healthbridge write dietary_water --value 250 --unit mL --at now --json
 healthbridge read step_count --from -1d --json
 ```
 
-## Command surface
+## Commands
 
-```
-healthbridge read    <type> [--from -7d] [--to now] [--limit N]
-healthbridge write   <type> --value <n> --unit <u> [--at <t>] [--meta k=v]
-healthbridge jobs    list|get|wait|cancel|prune
-healthbridge status
-healthbridge types
-healthbridge pair
-healthbridge wipe    [--yes]
-healthbridge version [--json]
-```
-
-`healthbridge <command> --help` for full flag listings, or see the
-agent skill at [`../skill/healthbridge/references/COMMANDS.md`](../skill/healthbridge/references/COMMANDS.md)
-for per-command JSON output shapes.
+Run `healthbridge help` for the full command list, or `healthbridge <command> --help` for per-command flags. The agent skill at [`../skill/healthbridge/references/COMMANDS.md`](../skill/healthbridge/references/COMMANDS.md) documents JSON output shapes.
 
 ## Layout
 
