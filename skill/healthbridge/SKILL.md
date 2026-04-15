@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires the `healthbridge` binary on PATH, a paired iPhone running the HealthBridge iOS app, and outbound HTTPS to the configured Cloudflare relay.
 metadata:
   version: "0.1.0"
-  source: https://github.com/shuyangli/apple-health-cli
+  source: https://github.com/shuyangli/healthbridge
 ---
 
 # healthbridge
@@ -23,7 +23,6 @@ ciphertext; the iPhone is the only place plaintext HealthKit data exists.
 | "I weigh 73.2 kg" | `healthbridge write body_mass --value 73.2 --unit kg --at now` |
 | "Steps yesterday?" | `healthbridge read step_count --from -1d --to now` |
 | "Resting heart rate this week" | `healthbridge read heart_rate_resting --from -7d` |
-| "Pull all my recent workouts" | `healthbridge sync --type workout` |
 | "Did the meal log apply?" | `healthbridge jobs wait <id>` |
 
 ## When NOT to invoke
@@ -32,9 +31,6 @@ ciphertext; the iPhone is the only place plaintext HealthKit data exists.
   Fitbit). HealthBridge only knows about Apple HealthKit.
 - The user wants you to *interpret* their data. Fetch with this skill
   first, then reason in your own response.
-- The user asks to delete every sample, revoke a pair, or wipe the
-  cache. Confirm explicitly before running `wipe` or destructive
-  `scopes revoke`.
 
 ## Always pass `--json`
 
@@ -52,31 +48,24 @@ Every response includes a `status` field.
 **Never claim a write applied if `status == "pending"`.** Remember the
 `job_id` and offer to follow up with `healthbridge jobs wait <id>`.
 
-## The two required env vars
+## Configuration
 
-To avoid passing `--pair` and `--relay` on every call, the user should set:
-
-```sh
-export HEALTHBRIDGE_PAIR=01J...        # ULID of the paired iPhone
-export HEALTHBRIDGE_RELAY=https://...  # base URL of the relay
-```
-
-If `HEALTHBRIDGE_PAIR` is unset, `healthbridge status --json` will list
-the pair records on disk; pick the most recent one.
+After `healthbridge pair`, the pair ID and relay URL are saved to
+`~/.healthbridge/config` and used as defaults for all subsequent
+commands. No env vars are required. The env vars `HEALTHBRIDGE_PAIR`
+and `HEALTHBRIDGE_RELAY` still work as overrides if set.
 
 ## Command summary
+
+Run `healthbridge help` for the full list. Key commands for the agent:
 
 ```
 healthbridge read <type> [--from -7d] [--to now] [--limit N] --json
 healthbridge write <type> --value <n> --unit <u> [--at <t>] [--meta k=v] --json
-healthbridge sync [--type <t>...] [--full] --json
+healthbridge profile <field> --json     # date_of_birth, biological_sex, blood_type, …
 healthbridge jobs list|get|wait|cancel|prune
 healthbridge status --json
-healthbridge scopes list|grant|revoke
 healthbridge types --json
-healthbridge profile <field> --json     # date_of_birth, biological_sex, blood_type, …
-healthbridge pair                       # user-only; never invoke from agent
-healthbridge wipe [--yes]                # destructive; confirm first
 ```
 
 `healthbridge profile <field>` returns a single HealthKit characteristic
@@ -156,8 +145,7 @@ healthbridge read step_count --from -7d --json
 ```
 
 Group the returned `samples[]` by day, sum, and present a short prose
-summary. For larger backfills, prefer `healthbridge sync --type
-step_count` (anchored delta query, much cheaper on repeat calls).
+summary.
 
 ### Logging a meal with macros
 
@@ -180,8 +168,8 @@ healthbridge write dietary_fat_total       --value 18  --unit g    --at now --js
   review and revoke at any time.
 - **Fetch only what you need.** A 7-day step query is fine; pulling
   every heart-rate sample for a year is rude.
-- **Confirm before destructive ops.** `wipe` and `scopes revoke` are
-  one-way doors from the agent's perspective.
+- **Confirm before destructive ops.** `wipe` is a one-way door from
+  the agent's perspective.
 
 ## Pairing is a user action
 

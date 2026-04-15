@@ -10,7 +10,7 @@ summary doesn't cover.
 |---|---|
 | `--pair <ulid>` | Which paired iPhone to talk to. Falls back to `HEALTHBRIDGE_PAIR`. |
 | `--relay <url>` | Relay base URL. Falls back to `HEALTHBRIDGE_RELAY`, then `http://127.0.0.1:8787`. |
-| `--wait <duration>` | How long to long-poll for a result before returning `pending`. Defaults to ~5s in interactive mode, 0s otherwise. |
+| `--wait <duration>` | How long to long-poll for a result before returning `pending`. Defaults to 60s in interactive mode, 0s otherwise. |
 | `--json` | Emit machine-readable JSON. Always pass this from an agent. |
 
 ## `read <type>`
@@ -71,35 +71,30 @@ JSON output (success): `{ "job_id": "...", "status": "done", "uuid": "<healthkit
 
 JSON output (pending): `{ "job_id": "...", "status": "pending" }`
 
-## `sync`
+## `profile <field>`
 
-Bulk delta-pull. Each sample type has its own `HKAnchoredObjectQuery`
-anchor stored in the local SQLite cache; subsequent `sync` calls only
-fetch new and deleted samples since the last anchor.
+Read a single HealthKit characteristic (static profile data, not
+time-series samples). These use a different HealthKit API than `read`.
 
 ```
-healthbridge sync [flags]
+healthbridge profile <field> [--json]
 ```
 
-| Flag | Default | Notes |
-|---|---|---|
-| `--type <t>...` | all supported | Limit sync to specific sample types. |
-| `--full` | off | Wipe anchors before syncing. Forces a full re-pull of every type listed. Rarely needed. |
+Supported fields: `date_of_birth`, `biological_sex`, `blood_type`,
+`fitzpatrick_skin_type`, `wheelchair_use`, `activity_move_mode`.
 
-JSON output:
+JSON output (success):
 
 ```json
 {
   "job_id": "01J...",
   "status": "done",
-  "results": [
-    { "type": "step_count", "added": 14, "deleted": 0 },
-    { "type": "heart_rate", "added": 142, "deleted": 1 }
-  ]
+  "field": "biological_sex",
+  "value": "female"
 }
 ```
 
-Prefer `sync` over repeated `read` for backfills longer than a day.
+An empty `value` means the user has not set the field in the Health app.
 
 ## `jobs`
 
@@ -127,8 +122,7 @@ draining the job if it has already been delivered.
 
 ## `status`
 
-Reads the local pair record, prints relay reachability, granted scopes,
-and (in M4+) queue depth.
+Reads the local pair record and prints relay reachability.
 
 ```
 healthbridge status --json
@@ -140,31 +134,10 @@ JSON output:
 {
   "pair_id": "01J...",
   "relay_url": "https://...workers.dev",
-  "relay_reachable": true,
-  "scopes": ["step_count", "dietary_energy_consumed", ...],
-  "paired_at": "2026-04-07T08:23:14Z"
+  "relay_ok": true,
+  "created": "2026-04-07T08:23:14Z"
 }
 ```
-
-Use this to discover which pair IDs exist on disk if `HEALTHBRIDGE_PAIR`
-is unset.
-
-## `scopes`
-
-Manage the per-pair allow-list of sample types this CLI can read or
-write. Stored in `~/.config/healthbridge/pairs/<pair_id>.json`.
-
-```
-healthbridge scopes list
-healthbridge scopes grant <type> [<type>...]
-healthbridge scopes revoke <type> [<type>...]
-```
-
-Empty scope list = grant everything (the default after pairing).
-
-The iPhone re-validates every operation against its own copy of the
-scopes, so revocations on the CLI side are advisory until the M3
-consent ledger lands.
 
 ## `types`
 
@@ -207,6 +180,52 @@ prompt — use it only after you've gotten the user's confirmation.
 `wipe` does **not** revoke the pair on the relay or on the iPhone. The
 user can re-pair afterwards by running `pair` again.
 
+## `unpair`
+
+Forget a pair locally — removes the pair record and clears the active
+default if it points to this pair. Does **not** touch the sample cache
+or job mirror (use `wipe` for that), and does **not** revoke on the
+relay.
+
+```
+healthbridge unpair --json
+```
+
+JSON output:
+
+```json
+{
+  "pair_id": "01J...",
+  "pair_record_removed": true,
+  "default_cleared": true
+}
+```
+
+## `prune <job_id>`
+
+Drop a job (and its result pages) from the relay's per-pair mailbox.
+Use this when a job is wedged — e.g. the result blob exceeds the
+relay's size cap.
+
+```
+healthbridge prune <job_id> [--results-only] [--json]
+```
+
+| Flag | Notes |
+|---|---|
+| `--results-only` | Only drop result pages; leave the inbound job so the iPhone retries. |
+
+This is a relay-side operation, distinct from `healthbridge jobs prune`
+which purges the local SQLite mirror by age.
+
+## `upgrade`
+
+Prints instructions for upgrading the CLI via Homebrew.
+
+```
+healthbridge upgrade
+```
+
 ## Error codes
 
 When `status == "failed"` or the CLI returns a non-zero exit code, the
@@ -217,8 +236,7 @@ under `error`). Common codes:
 |---|---|---|
 | `pair_incomplete` | Pairing has not finished. | Tell the user to run `healthbridge pair`. |
 | `bad_auth` | Local pair record is stale (token rotated). | Tell the user to re-pair. |
-| `scope_denied` | Requested type isn't in the granted scope set. | Either pick a different approach or ask the user to grant it via `scopes grant`. |
 | `mailbox_full` | Relay queue is at capacity. | Wait and retry; surface the error to the user if it persists. |
-| `anchor_invalidated` | The local sync cache is stale. | Run `healthbridge sync --full --type <t>` to recover. |
 | `unsupported_type` | The requested sample type isn't wired in this CLI build. | Run `healthbridge types --json` to see what's supported. |
-| `not_implemented` | The job kind is recognised but not yet implemented (e.g. workout writes). | Tell the user it's not yet supported. |
+| `healthkit_error` | HealthKit returned an error on the iPhone. | Surface the message to the user. |
+| `not_implemented` | The job kind is recognised but not yet implemented. | Tell the user it's not yet supported. |
