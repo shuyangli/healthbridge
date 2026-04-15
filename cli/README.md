@@ -50,7 +50,7 @@ matching tarball from
 [the Releases page](https://github.com/shuyangli/healthbridge/releases):
 
 ```sh
-VERSION=0.0.3
+VERSION=0.1.0
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 curl -L "https://github.com/shuyangli/healthbridge/releases/download/v${VERSION}/healthbridge_${VERSION}_${OS}_${ARCH}.tar.gz" \
