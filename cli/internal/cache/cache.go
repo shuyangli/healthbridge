@@ -1,12 +1,7 @@
-// Package cache is the CLI's local mirror of HealthKit samples plus the
-// per-type sync anchors. It is populated by `healthbridge sync` via the
-// HKAnchoredObjectQuery delta protocol; the iPhone is still the source of
-// truth, but the cache lets the agent answer "what data has the user ever
-// shared with me" without round-tripping.
-//
-// As of M4 the cache stores samples but does not yet expose query helpers
-// — the read subcommand always goes through the iPhone. Reading from
-// cache is a future enhancement.
+// Package cache is the CLI's local mirror of HealthKit samples. The
+// iPhone is still the source of truth, but the cache lets the agent
+// answer "what data has the user ever shared with me" without
+// round-tripping.
 package cache
 
 import (
@@ -15,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -66,74 +60,12 @@ CREATE TABLE IF NOT EXISTS samples (
 );
 CREATE INDEX IF NOT EXISTS samples_type_start
   ON samples(pair_id, sample_type, start_at DESC);
-
-CREATE TABLE IF NOT EXISTS anchors (
-    pair_id     TEXT NOT NULL,
-    sample_type TEXT NOT NULL,
-    anchor      BLOB,
-    updated_at  INTEGER NOT NULL,
-    PRIMARY KEY (pair_id, sample_type)
-);
 `
 	_, err := c.db.Exec(schema)
 	if err != nil {
 		return fmt.Errorf("cache: migrate: %w", err)
 	}
 	return nil
-}
-
-// GetAnchor returns the per-type anchor blob for this pair, or nil if no
-// previous sync has happened. Callers send a missing-anchor request to
-// the iPhone for a full sync of that type.
-func (c *Cache) GetAnchor(pairID, sampleType string) ([]byte, error) {
-	var anchor []byte
-	err := c.db.QueryRow(`
-        SELECT anchor FROM anchors WHERE pair_id = ? AND sample_type = ?`,
-		pairID, sampleType,
-	).Scan(&anchor)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("cache: get anchor: %w", err)
-	}
-	return anchor, nil
-}
-
-// SetAnchor persists a new anchor for (pair, type). Idempotent.
-func (c *Cache) SetAnchor(pairID, sampleType string, anchor []byte) error {
-	_, err := c.db.Exec(`
-        INSERT INTO anchors (pair_id, sample_type, anchor, updated_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(pair_id, sample_type) DO UPDATE
-        SET anchor = excluded.anchor, updated_at = excluded.updated_at`,
-		pairID, sampleType, anchor, time.Now().UnixMilli(),
-	)
-	if err != nil {
-		return fmt.Errorf("cache: set anchor: %w", err)
-	}
-	return nil
-}
-
-// AllAnchors returns the current set of anchors for pair, used by
-// `healthbridge sync` to build the request payload.
-func (c *Cache) AllAnchors(pairID string) (map[string][]byte, error) {
-	rows, err := c.db.Query(`
-        SELECT sample_type, anchor FROM anchors WHERE pair_id = ?`, pairID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make(map[string][]byte)
-	for rows.Next() {
-		var t string
-		var a []byte
-		if err := rows.Scan(&t, &a); err != nil {
-			return nil, err
-		}
-		out[t] = a
-	}
-	return out, rows.Err()
 }
 
 // ApplyAdds inserts or replaces a batch of samples in a single transaction.
@@ -229,42 +161,8 @@ func (c *Cache) SampleCountByType(pairID, sampleType string) (int, error) {
 	return n, err
 }
 
-// Wipe removes everything for this pair (samples + anchors). Used by
-// `healthbridge wipe` and by `healthbridge sync --full` to reset a type.
+// Wipe removes all samples for this pair. Used by `healthbridge wipe`.
 func (c *Cache) Wipe(pairID string) error {
-	tx, err := c.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM samples WHERE pair_id = ?`, pairID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`DELETE FROM anchors WHERE pair_id = ?`, pairID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// WipeType removes the anchor and samples for a specific type. Used by
-// `healthbridge sync --full --type body_mass`.
-func (c *Cache) WipeType(pairID, sampleType string) error {
-	tx, err := c.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(
-		`DELETE FROM samples WHERE pair_id = ? AND sample_type = ?`,
-		pairID, sampleType,
-	); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(
-		`DELETE FROM anchors WHERE pair_id = ? AND sample_type = ?`,
-		pairID, sampleType,
-	); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err := c.db.Exec(`DELETE FROM samples WHERE pair_id = ?`, pairID)
+	return err
 }

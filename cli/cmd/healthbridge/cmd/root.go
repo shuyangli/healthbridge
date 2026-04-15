@@ -30,7 +30,6 @@ func Root() *cobra.Command {
 	root.AddCommand(newPairCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newJobsCmd())
-	root.AddCommand(newSyncCmd())
 	root.AddCommand(newWipeCmd())
 	root.AddCommand(newUnpairCmd())
 	root.AddCommand(newPruneCmd())
@@ -43,7 +42,7 @@ func Root() *cobra.Command {
 
 const rootLong = `healthbridge is the desktop CLI for the HealthBridge project.
 
-It encodes a job (read, write, or sync), pushes it to a relay, and waits
+It encodes a job (read, write, or profile), pushes it to a relay, and waits
 for the iOS HealthBridge app to drain it when the notification is processed
 or the user opens their app. Every job and result that crosses the relay is
 end-to-end encrypted.`

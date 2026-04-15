@@ -33,7 +33,7 @@ extension SampleType: Codable {
 }
 
 public enum JobKind: String, Codable, Sendable {
-    case read, write, sync, profile
+    case read, write, profile
 }
 
 /// Wire identifier for an HKCharacteristicTypeIdentifier value (DOB,
@@ -188,7 +188,7 @@ public struct ProfileResult: Codable, Sendable, Equatable {
 }
 
 /// Job is the plaintext envelope an agent submits. The payload is one of
-/// ReadPayload / WritePayload / SyncPayload (M4) and is decoded based on
+/// ReadPayload / WritePayload / ProfilePayload and is decoded based on
 /// the job's `kind`. We use AnyCodable so the kit doesn't need to know
 /// every payload concretely.
 public struct Job: Codable, Sendable {

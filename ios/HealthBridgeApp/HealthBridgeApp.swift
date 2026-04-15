@@ -507,7 +507,7 @@ final class AppCoordinator: ObservableObject {
     private static func shouldPersistResult(jobKind: JobKind, status: ResultStatus) -> Bool {
         if status == .failed { return true }
         switch jobKind {
-        case .read, .sync:
+        case .read:
             return false
         case .write, .profile:
             return true
@@ -537,7 +537,6 @@ final class AppCoordinator: ObservableObject {
         switch job.kind {
         case .read:    kind = .read
         case .write:   kind = .write
-        case .sync:    kind = .sync
         case .profile: return // profile jobs aren't audited
         }
 
@@ -687,12 +686,6 @@ final class AppCoordinator: ObservableObject {
             let uuid = try await self.runWrite(payload: payload)
             let wr = WriteResult(uuid: uuid)
             return JobResult(jobID: job.id, status: .done, result: try .from(wr))
-        case .sync:
-            return JobResult(
-                jobID: job.id,
-                status: .failed,
-                error: JobError(code: "not_implemented", message: "kind sync is M4+")
-            )
         case .profile:
             let payload = try job.decodeProfilePayload()
             do {

@@ -15,7 +15,6 @@ public struct AuditEntry: Codable, Sendable, Equatable {
     public enum Kind: String, Codable, Sendable {
         case read
         case write
-        case sync
     }
 
     public enum Outcome: String, Codable, Sendable {

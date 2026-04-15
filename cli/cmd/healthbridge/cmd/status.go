@@ -17,7 +17,7 @@ func newStatusCmd() *cobra.Command {
 		Long: `Reads the local pair record for --pair, prints the relay URL,
 and pings the relay's /v1/health endpoint to confirm it's reachable.
 
-In M4+ this also reports queue depth and last sync timestamps.`,
+In M4+ this also reports queue depth.`,
 		RunE: runStatus,
 	}
 	return c

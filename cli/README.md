@@ -130,7 +130,6 @@ healthbridge read step_count --from -1d --json
 ```
 healthbridge read    <type> [--from -7d] [--to now] [--limit N]
 healthbridge write   <type> --value <n> --unit <u> [--at <t>] [--meta k=v]
-healthbridge sync    [--type <t>...] [--full]
 healthbridge jobs    list|get|wait|cancel|prune
 healthbridge status
 healthbridge types

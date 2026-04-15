@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/shuyangli/healthbridge/cli/internal/cache"
 	"github.com/shuyangli/healthbridge/cli/internal/config"
 	"github.com/shuyangli/healthbridge/cli/internal/relay"
 )
@@ -163,6 +165,19 @@ func loadPairRecord(c *cobra.Command) (*config.PairRecord, error) {
 		return nil, err
 	}
 	return rec, nil
+}
+
+// openCache returns the SQLite cache handle, respecting HEALTHBRIDGE_CACHE_DB
+// and XDG_DATA_HOME overrides.
+func openCache() (*cache.Cache, error) {
+	if v := os.Getenv("HEALTHBRIDGE_CACHE_DB"); v != "" {
+		return cache.Open(v)
+	}
+	dir := configDir()
+	if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		dir = filepath.Join(v, "healthbridge")
+	}
+	return cache.Open(filepath.Join(dir, "cache.db"))
 }
 
 // ackResult tells the relay we're done with a job's result pages so

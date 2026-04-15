@@ -10,15 +10,8 @@ import (
 )
 
 // JobHandler is what the fake iOS app side runs against each decoded job.
-// Returns a *health.Result for single-page jobs (read, write); use
-// MultiPageJobHandler for sync jobs that may produce many pages keyed to
-// the same job_id.
+// Returns a *health.Result for single-page jobs (read, write, profile).
 type JobHandler func(ctx context.Context, job *health.Job) (*health.Result, error)
-
-// MultiPageJobHandler is the variant for sync-style jobs that may emit
-// multiple result pages. Each entry will be posted as its own /v1/results
-// blob with its own page_index.
-type MultiPageJobHandler func(ctx context.Context, job *health.Job) ([]*health.Result, error)
 
 // FakeIOSDrainer mimics the iOS HealthBridge app: it long-polls the relay
 // for jobs, decodes each one, runs a handler, and posts the result back.
@@ -30,22 +23,13 @@ type FakeIOSDrainer struct {
 	Client  *relay.Client
 	Session *jobs.Session
 	Handler JobHandler
-	// MultiPage is consulted first; falls back to Handler when nil.
-	// If MultiPage returns an error, the drainer wraps it as a failed
-	// page just like Handler errors.
-	MultiPage MultiPageJobHandler
-	cursor    int64
+	cursor  int64
 }
 
 // NewDrainer wires a drainer to an existing relay client and a session
 // holding the shared key. The handler will be called once per drained job.
 func NewDrainer(c *relay.Client, s *jobs.Session, h JobHandler) *FakeIOSDrainer {
 	return &FakeIOSDrainer{Client: c, Session: s, Handler: h}
-}
-
-// NewMultiPageDrainer is the multi-page variant used by sync scenario tests.
-func NewMultiPageDrainer(c *relay.Client, s *jobs.Session, h MultiPageJobHandler) *FakeIOSDrainer {
-	return &FakeIOSDrainer{Client: c, Session: s, MultiPage: h}
 }
 
 // Run loops until ctx is cancelled. Each iteration polls for one batch of
@@ -89,40 +73,29 @@ func (d *FakeIOSDrainer) processOne(ctx context.Context, jb relay.JobBlob) error
 		}}
 	}
 	for i, res := range pages {
-		// If the handler returned a result without explicitly setting
-		// PageIndex, fall back to the order in the slice.
-		pageIndex := res.PageIndex
-		if pageIndex == 0 && i > 0 {
-			pageIndex = i
-		}
-		blob, err := d.Session.SealResult(job.ID, pageIndex, res)
+		blob, err := d.Session.SealResult(job.ID, i, res)
 		if err != nil {
 			return fmt.Errorf("drainer: seal result: %w", err)
 		}
-		// Mirror the iOS drain loop's persistence policy: read/sync
-		// → ephemeral, write/profile/failed → persistent. Failures are
-		// always persisted so the agent never silently loses an error
-		// report.
+		// Mirror the iOS drain loop's persistence policy: read results
+		// are ephemeral (large blobs, synchronous CLI); write/profile
+		// results are persistent (tiny, agent may retrieve later).
+		// Failed status is always persisted so the agent never silently
+		// loses an error report.
 		persistent := persistentForJobAndResult(job.Kind, res.Status)
-		if _, err := d.Client.PostResult(ctx, job.ID, pageIndex, blob, persistent); err != nil {
+		if _, err := d.Client.PostResult(ctx, job.ID, i, blob, persistent); err != nil {
 			return fmt.Errorf("drainer: post result: %w", err)
 		}
 	}
 	return nil
 }
 
-// persistentForJobAndResult mirrors the iOS-side
-// HealthBridgeApp.shouldPersistResult policy: read/sync results are
-// ephemeral (large blobs, synchronous CLI on the other end);
-// write/profile results are persistent (tiny blobs the agent may
-// come back to retrieve); a failed status overrides kind so error
-// reports survive a Durable Object eviction.
 func persistentForJobAndResult(kind health.JobKind, status health.ResultStatus) bool {
 	if status == health.StatusFailed {
 		return true
 	}
 	switch kind {
-	case health.KindRead, health.KindSync:
+	case health.KindRead:
 		return false
 	case health.KindWrite, health.KindProfile:
 		return true
@@ -131,15 +104,12 @@ func persistentForJobAndResult(kind health.JobKind, status health.ResultStatus) 
 }
 
 func (d *FakeIOSDrainer) runHandler(ctx context.Context, job *health.Job) ([]*health.Result, error) {
-	if d.MultiPage != nil {
-		return d.MultiPage(ctx, job)
+	if d.Handler == nil {
+		return nil, fmt.Errorf("drainer: no handler configured")
 	}
-	if d.Handler != nil {
-		res, err := d.Handler(ctx, job)
-		if err != nil {
-			return nil, err
-		}
-		return []*health.Result{res}, nil
+	res, err := d.Handler(ctx, job)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("drainer: no handler configured")
+	return []*health.Result{res}, nil
 }

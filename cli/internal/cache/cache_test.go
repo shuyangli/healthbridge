@@ -28,31 +28,6 @@ func sample(uuid string, value float64, start time.Time) health.Sample {
 	}
 }
 
-func TestSetGetAnchor(t *testing.T) {
-	c := newCache(t)
-	if a, err := c.GetAnchor("p", "step_count"); err != nil || a != nil {
-		t.Errorf("expected nil before any set, got %v / %v", a, err)
-	}
-	if err := c.SetAnchor("p", "step_count", []byte("anchor-1")); err != nil {
-		t.Fatal(err)
-	}
-	a, err := c.GetAnchor("p", "step_count")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(a) != "anchor-1" {
-		t.Errorf("anchor = %q, want anchor-1", a)
-	}
-	// Set again to verify upsert.
-	if err := c.SetAnchor("p", "step_count", []byte("anchor-2")); err != nil {
-		t.Fatal(err)
-	}
-	a, _ = c.GetAnchor("p", "step_count")
-	if string(a) != "anchor-2" {
-		t.Errorf("after upsert anchor = %q, want anchor-2", a)
-	}
-}
-
 func TestApplyAddsThenDeletes(t *testing.T) {
 	c := newCache(t)
 	now := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
@@ -112,44 +87,15 @@ func TestSampleCountByType(t *testing.T) {
 	}
 }
 
-func TestWipeAndWipeType(t *testing.T) {
+func TestWipe(t *testing.T) {
 	c := newCache(t)
 	now := time.Now()
 	_ = c.ApplyAdds("p", []health.Sample{sample("a", 1, now)})
-	_ = c.SetAnchor("p", "step_count", []byte("x"))
-
-	if err := c.WipeType("p", "step_count"); err != nil {
-		t.Fatal(err)
-	}
-	n, _ := c.SampleCountByType("p", "step_count")
-	if n != 0 {
-		t.Errorf("step_count count after WipeType = %d, want 0", n)
-	}
-	if a, _ := c.GetAnchor("p", "step_count"); a != nil {
-		t.Errorf("anchor not cleared by WipeType")
-	}
-
-	// Wipe the whole pair.
-	_ = c.ApplyAdds("p", []health.Sample{sample("a", 1, now)})
-	_ = c.SetAnchor("p", "step_count", []byte("x"))
 	if err := c.Wipe("p"); err != nil {
 		t.Fatal(err)
 	}
-	n, _ = c.SampleCount("p")
+	n, _ := c.SampleCount("p")
 	if n != 0 {
 		t.Errorf("count after Wipe = %d, want 0", n)
-	}
-}
-
-func TestAllAnchors(t *testing.T) {
-	c := newCache(t)
-	_ = c.SetAnchor("p", "step_count", []byte("a"))
-	_ = c.SetAnchor("p", "heart_rate", []byte("b"))
-	got, err := c.AllAnchors("p")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 || string(got["step_count"]) != "a" || string(got["heart_rate"]) != "b" {
-		t.Errorf("AllAnchors = %v", got)
 	}
 }

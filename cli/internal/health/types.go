@@ -240,7 +240,6 @@ type JobKind string
 const (
 	KindRead    JobKind = "read"
 	KindWrite   JobKind = "write"
-	KindSync    JobKind = "sync"
 	KindProfile JobKind = "profile"
 )
 
@@ -323,34 +322,15 @@ type WriteResult struct {
 	UUID string `json:"uuid"`
 }
 
-// SyncPayload is the plaintext payload for a `sync` job. Anchors are opaque
-// base64 blobs whose meaning only the iOS app understands; an empty/missing
-// entry means "full sync that type".
-type SyncPayload struct {
-	Types   []SampleType      `json:"types"`
-	Anchors map[string]string `json:"anchors,omitempty"`
-}
-
-// SyncResultPage is one page of an anchored sync. Multiple pages may share
-// a single job_id; the CLI reassembles them.
-type SyncResultPage struct {
-	Type       SampleType `json:"type"`
-	PageIndex  int        `json:"page_index"`
-	Added      []Sample   `json:"added,omitempty"`
-	Deleted    []string   `json:"deleted,omitempty"`
-	NextAnchor string     `json:"next_anchor,omitempty"`
-	More       bool       `json:"more"`
-}
-
 // Job is the plaintext envelope an agent / CLI submits.
 type Job struct {
 	ID        string    `json:"id"`
 	Kind      JobKind   `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
 	Deadline  time.Time `json:"deadline,omitempty"`
-	// Payload is one of ReadPayload / WritePayload / SyncPayload, json-encoded
-	// as an object. We keep it as RawMessage at the relay layer; the CLI and
-	// iOS app type-assert based on Kind.
+	// Payload is one of ReadPayload / WritePayload / ProfilePayload,
+	// json-encoded as an object. We keep it as RawMessage at the relay
+	// layer; the CLI and iOS app type-assert based on Kind.
 	Payload any `json:"payload"`
 }
 
@@ -368,15 +348,14 @@ type JobError struct {
 	Message string `json:"message"`
 }
 
-// Result is one page of a job's response. Read and write jobs only ever
-// produce one page; sync jobs may produce many.
+// Result is one page of a job's response.
 type Result struct {
 	JobID     string       `json:"job_id"`
 	PageIndex int          `json:"page_index"`
 	Status    ResultStatus `json:"status"`
-	// Result is one of ReadResult / WriteResult / SyncResultPage, depending
-	// on the originating Job.Kind. Carried as `any` because the CLI and iOS
-	// app know the kind out-of-band.
+	// Result is one of ReadResult / WriteResult / ProfileResult, depending
+	// on the originating Job.Kind. Carried as `any` because the CLI and
+	// iOS app know the kind out-of-band.
 	Result any       `json:"result,omitempty"`
 	Error  *JobError `json:"error,omitempty"`
 }

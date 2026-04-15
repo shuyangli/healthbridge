@@ -79,7 +79,6 @@ private struct ActivityLogRow: View {
         switch entry.kind {
         case .read:  "arrow.down.circle.fill"
         case .write: "arrow.up.circle.fill"
-        case .sync:  "arrow.triangle.2.circlepath.circle.fill"
         }
     }
 
@@ -87,7 +86,6 @@ private struct ActivityLogRow: View {
         switch entry.kind {
         case .read:  .blue
         case .write: .orange
-        case .sync:  .purple
         }
     }
 
