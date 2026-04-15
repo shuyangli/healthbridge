@@ -243,7 +243,7 @@ final class AppCoordinator: ObservableObject {
                 self.auth = .authorized
                 self.authStateStore.save(.authorized)
                 self.status = self.pair == nil
-                    ? "Connected — pair with your Mac to start draining."
+                    ? "Connected — pair with your computer to start draining."
                     : "Connected — draining relay"
                 log.info("requestAuthorization returned successfully; transitioning to .authorized")
                 if self.pair != nil {
@@ -972,34 +972,16 @@ private struct AuthStateStore {
 
 struct ContentView: View {
     @EnvironmentObject var coordinator: AppCoordinator
+    @State private var showPairingSheet = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("HealthBridge").font(.largeTitle).bold()
-            Text(coordinator.status)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-
+        Group {
             switch coordinator.auth {
-            case .unknown:
-                // The auto-prompt fires from scenePhaseChanged the moment
-                // the scene goes active; .unknown is just the brief
-                // window before that callback runs.
+            case .unknown, .requesting:
                 ProgressView()
 
             case .denied:
-                // The user explicitly declined; offer a retry button
-                // rather than re-prompting on every foreground.
-                Button(action: { coordinator.requestAuthorizationFromUser() }) {
-                    Text("Connect to HealthKit")
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent)
-
-            case .requesting:
-                ProgressView()
+                deniedView
 
             case .unavailable:
                 Text("HealthKit is not available on this device.")
@@ -1007,21 +989,33 @@ struct ContentView: View {
 
             case .authorized:
                 if coordinator.pair == nil {
-                    PairingView(model: makePairingModel())
-                        .frame(maxHeight: .infinity)
+                    OnboardingView(
+                        onPairDevice: { showPairingSheet = true }
+                    )
+                    .sheet(isPresented: $showPairingSheet) {
+                        PairingView(model: makePairingModel())
+                            .presentationDetents([.large])
+                    }
                 } else {
                     pairedView
-                        .frame(maxHeight: .infinity)
                 }
             }
-
-            Text("Keep this screen open for the agent to read your Health data.")
-                .multilineTextAlignment(.center)
-                .padding()
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
-        .padding()
+    }
+
+    private var deniedView: some View {
+        VStack(spacing: 16) {
+            Text("HealthBridge needs access to Apple Health to work.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            Button(action: { coordinator.requestAuthorizationFromUser() }) {
+                Text("Connect to HealthKit")
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+        }
     }
 
     private var pairedView: some View {
@@ -1053,8 +1047,9 @@ struct ContentView: View {
 
     private func makePairingModel() -> PairingFlowModel {
         let m = PairingFlowModel()
-        m.onPaired = { stored in
+        m.onPaired = { [self] stored in
             coordinator.pairingCompleted(stored)
+            showPairingSheet = false
         }
         return m
     }
