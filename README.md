@@ -34,6 +34,49 @@ You'll need to set up your own Cloudflare Worker as the relay — see
 is a dumb store-and-forward mailbox that only ever sees ciphertext, so
 running your own instance is the safest deployment.
 
+Optionally, you can enable push notifications so the iOS app wakes up
+automatically when a job is enqueued. This requires an Apple Developer
+account and an APNs authentication key — see the
+[APNs setup section](relay/README.md#apple-push-notifications-apns) in
+the relay README. Without push notifications the app falls back to
+polling when foregrounded.
+
+## Install the iOS app
+
+The iOS app is not on the App Store — side-load it onto your iPhone
+by building from Xcode. An Apple Developer account (free or paid) is
+required for signing.
+
+```sh
+cd ios
+
+# Set your signing identity and bundle ID:
+export HEALTHBRIDGE_TEAM_ID="<your Apple Developer Team ID>"
+export HEALTHBRIDGE_BUNDLE_ID_PREFIX="com.<yourname>"
+export HEALTHBRIDGE_BUNDLE_ID="com.<yourname>.HealthBridge"
+
+# Generate the Xcode project and open it:
+xcodegen
+open HealthBridge.xcodeproj
+```
+
+Then connect your iPhone (or select it under *Destination*) and hit
+**Cmd+R** to build and run.
+
+See [`ios/README.md`](ios/README.md) for more details.
+
+## Install the agent skill
+
+After installing the CLI, add the HealthBridge agent skill so your AI
+agent knows how to drive it:
+
+```sh
+npx skills add ./skill/healthbridge
+```
+
+See [`skill/healthbridge/README.md`](skill/healthbridge/README.md) for
+alternative install methods and agent-specific options.
+
 `brew upgrade healthbridge` picks up future releases.
 
 Linux users and anyone who wants a tarball can grab one from

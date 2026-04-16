@@ -33,7 +33,7 @@ npx wrangler dev  # spawns workerd locally on http://127.0.0.1:8787
 The relay is designed to be self-hosted — there is no shared
 "healthbridge.example" instance. Each user runs their own Worker on
 their own Cloudflare account. The relay only ever sees ciphertext
-(M2+), so this is the safest deployment.
+so this is the safest deployment.
 
 Cloudflare's free plan is sufficient — Durable Objects on the free
 tier work as long as the DO classes are SQLite-backed, which this
@@ -80,6 +80,43 @@ a matching `X-Relay-Secret` header. The CLI reads the secret from
 `HEALTHBRIDGE_RELAY_SECRET` and embeds it in the QR code so the iOS
 app sends it automatically. Post-pairing endpoints are unaffected —
 they use the per-pair Bearer token.
+
+### Apple Push Notifications (APNs)
+
+The relay can send push notifications to the iOS app so it wakes up
+and drains the job mailbox without the user having to open the app
+manually. This requires an Apple Developer account and a few secrets
+pushed to Cloudflare.
+
+1. **Create an APNs authentication key** in the
+   [Apple Developer portal](https://developer.apple.com/account/resources/authkeys/list):
+   - Go to *Certificates, Identifiers & Keys* → *Keys* → **+**.
+   - Enable *Apple Push Notifications service (APNs)*.
+   - Download the `.p8` file — you get **one chance** to download it.
+   - Note the **Key ID** shown after creation and your **Team ID**
+     (top-right of the portal, or *Membership* → *Team ID*).
+
+2. **Push the secrets to Cloudflare:**
+
+   ```sh
+   # The .p8 file contents (include the BEGIN/END lines).
+   npx wrangler secret put APNS_AUTH_KEY < AuthKey_XXXXXXXXXX.p8
+
+   # The iOS app's bundle identifier — must match HEALTHBRIDGE_BUNDLE_ID
+   # you used when building the iOS app with xcodegen.
+   npx wrangler secret put APNS_BUNDLE_ID
+
+   # The Key ID from step 1.
+   npx wrangler secret put APNS_KEY_ID
+
+   # Your Apple Developer Team ID.
+   npx wrangler secret put APNS_TEAM_ID
+   ```
+
+When all four secrets are set, the relay sends a background push to
+the paired device whenever a new job is enqueued. If any secret is
+missing, the relay silently skips the push and the app falls back to
+polling when foregrounded.
 
 ## API
 
