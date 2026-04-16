@@ -146,7 +146,7 @@ final class AppCoordinator: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if let entries = try? await self.auditLog.all() {
-                self.auditEntries = entries.suffix(ActivityLogView.displayLimit)
+                self.auditEntries = entries
             }
         }
     }
@@ -556,8 +556,8 @@ final class AppCoordinator: ObservableObject {
         )
         try? await auditLog.append(entry)
         auditEntries.append(entry)
-        if auditEntries.count > ActivityLogView.displayLimit {
-            auditEntries.removeFirst(auditEntries.count - ActivityLogView.displayLimit)
+        if auditEntries.count > AuditLog.maxEntries {
+            auditEntries.removeFirst(auditEntries.count - AuditLog.maxEntries)
         }
     }
 
