@@ -77,8 +77,8 @@ private struct ActivityLogRow: View {
 
     private var iconName: String {
         switch entry.kind {
-        case .read:  "arrow.down.circle.fill"
-        case .write: "arrow.up.circle.fill"
+        case .read:  "arrow.up.circle.fill"
+        case .write: "arrow.down.circle.fill"
         }
     }
 
