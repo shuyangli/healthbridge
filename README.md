@@ -34,11 +34,12 @@ You'll need to set up your own Cloudflare Worker as the relay — see
 is a dumb store-and-forward mailbox that only ever sees ciphertext, so
 running your own instance is the safest deployment.
 
-To enable push notifications (so the iOS app wakes up automatically
-when a job is enqueued), you'll also need an Apple Developer account
-and an APNs authentication key — see the
+Optionally, you can enable push notifications so the iOS app wakes up
+automatically when a job is enqueued. This requires an Apple Developer
+account and an APNs authentication key — see the
 [APNs setup section](relay/README.md#apple-push-notifications-apns) in
-the relay README.
+the relay README. Without push notifications the app falls back to
+polling when foregrounded.
 
 ## Install the iOS app
 

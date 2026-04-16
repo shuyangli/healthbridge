@@ -33,7 +33,7 @@ npx wrangler dev  # spawns workerd locally on http://127.0.0.1:8787
 The relay is designed to be self-hosted — there is no shared
 "healthbridge.example" instance. Each user runs their own Worker on
 their own Cloudflare account. The relay only ever sees ciphertext
-(M2+), so this is the safest deployment.
+so this is the safest deployment.
 
 Cloudflare's free plan is sufficient — Durable Objects on the free
 tier work as long as the DO classes are SQLite-backed, which this
