@@ -38,3 +38,6 @@ secrets/
 # wrangler
 .wrangler/
 
+# Claude
+.claude/
+
