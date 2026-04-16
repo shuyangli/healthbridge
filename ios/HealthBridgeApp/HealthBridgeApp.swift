@@ -145,6 +145,7 @@ final class AppCoordinator: ObservableObject {
         self.auditLog = AuditLog(fileURL: Self.auditLogURL())
         self.pair = PairStorage.load()
         self.auth = authStateStore.load()
+        self.connectionStatus = self.pair != nil ? .backgrounded : .notPaired
         networkMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
                 self?.networkAvailable = path.status == .satisfied
@@ -296,7 +297,7 @@ final class AppCoordinator: ObservableObject {
             log.info("startDrainLoopIfNeeded: no pair — skipping")
             return
         }
-        connectionStatus = .connecting
+        connectionStatus = .connected
         drainTask = Task { @MainActor in
             do {
                 try await self.drainLoop(pair: pair)
@@ -462,7 +463,6 @@ final class AppCoordinator: ObservableObject {
         log.info("drainLoop start cursor=\(cursor, privacy: .public)")
         while !Task.isCancelled {
             let page = try await client.pollJobs(sinceMs: cursor, waitMs: 25_000)
-            self.connectionStatus = .connected
             for jb in page.jobs {
                 let outcome = await self.processOneJob(jb: jb, session: session, client: client)
                 switch outcome {
