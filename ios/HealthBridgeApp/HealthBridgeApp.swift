@@ -12,6 +12,7 @@ import HealthKit
 import CryptoKit
 import HealthBridgeKit
 import UserNotifications
+import Network
 import OSLog
 
 /// All HealthKit + drain-loop diagnostics flow through this logger.
@@ -117,8 +118,8 @@ final class AppCoordinator: ObservableObject {
         case denied(String)
     }
 
-    @Published var status: String = "Starting up…"
-    @Published var lastError: String?
+    @Published var connectionStatus: ConnectionStatus = .notPaired
+    @Published var networkAvailable: Bool = true
     @Published var drainedCount: Int = 0
     @Published var auth: AuthState = .unknown
     /// The currently-paired Mac, if any. nil = no pair on disk yet,
@@ -138,11 +139,19 @@ final class AppCoordinator: ObservableObject {
     private var pushDrainRequested = false
     private let store = HKHealthStore()
     private let authStateStore = AuthStateStore()
+    private let networkMonitor = NWPathMonitor()
 
     init() {
         self.auditLog = AuditLog(fileURL: Self.auditLogURL())
         self.pair = PairStorage.load()
         self.auth = authStateStore.load()
+        self.connectionStatus = self.pair != nil ? .backgrounded : .notPaired
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor [weak self] in
+                self?.networkAvailable = path.status == .satisfied
+            }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "li.shuyang.healthbridge.netmon"))
         Task { @MainActor [weak self] in
             guard let self else { return }
             if let entries = try? await self.auditLog.all() {
@@ -212,7 +221,7 @@ final class AppCoordinator: ObservableObject {
         stopDrainLoop()
         try? PairStorage.clear()
         self.pair = nil
-        self.status = "Unpaired. Run `healthbridge pair` on your Mac to pair again."
+        self.connectionStatus = .notPaired
     }
 
     // MARK: - Authorisation (called from a button tap)
@@ -228,13 +237,13 @@ final class AppCoordinator: ObservableObject {
         log.info("HKHealthStore.isHealthDataAvailable() = \(available, privacy: .public)")
         guard available else {
             auth = .unavailable
-            status = "HealthKit is not available on this device."
+            connectionStatus = .relayError("HealthKit is not available on this device.")
             log.error("HealthKit reports unavailable — likely an iOS Simulator without HealthKit, or a non-iPhone device")
             return
         }
 
         auth = .requesting
-        status = "Asking HealthKit for permission…"
+        connectionStatus = .connecting
         log.info("transitioning to .requesting; will call HKHealthStore.requestAuthorization next")
 
         Task { @MainActor in
@@ -242,9 +251,7 @@ final class AppCoordinator: ObservableObject {
                 try await self.requestAuthorization()
                 self.auth = .authorized
                 self.authStateStore.save(.authorized)
-                self.status = self.pair == nil
-                    ? "Connected — pair with your computer to start draining."
-                    : "Connected — draining relay"
+                self.connectionStatus = self.pair == nil ? .notPaired : .connected
                 log.info("requestAuthorization returned successfully; transitioning to .authorized")
                 if self.pair != nil {
                     self.startDrainLoopIfNeeded()
@@ -252,8 +259,7 @@ final class AppCoordinator: ObservableObject {
             } catch {
                 self.auth = .denied("\(error)")
                 self.authStateStore.save(self.auth)
-                self.lastError = "\(error)"
-                self.status = "HealthKit permission failed: \(error.localizedDescription)"
+                self.connectionStatus = .relayError("HealthKit permission failed: \(error.localizedDescription)")
                 log.error("requestAuthorization threw: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -291,14 +297,14 @@ final class AppCoordinator: ObservableObject {
             log.info("startDrainLoopIfNeeded: no pair — skipping")
             return
         }
+        connectionStatus = .connected
         drainTask = Task { @MainActor in
             do {
                 try await self.drainLoop(pair: pair)
-            } catch is CancellationError {
-                // expected on backgrounding
             } catch {
-                self.lastError = "\(error)"
-                self.status = "Drain stopped: \(error.localizedDescription)"
+                if let status = classifyDrainError( error) {
+                    self.connectionStatus = status
+                }
             }
             self.drainTask = nil
         }
@@ -308,7 +314,7 @@ final class AppCoordinator: ObservableObject {
         drainTask?.cancel()
         drainTask = nil
         if case .authorized = auth, pair != nil {
-            status = "Backgrounded — waiting for push."
+            connectionStatus = .backgrounded
         }
     }
 
@@ -425,11 +431,11 @@ final class AppCoordinator: ObservableObject {
 
     private func drainLoop(pair startingPair: StoredPair) async throws {
         guard let relayURL = URL(string: startingPair.relayURL) else {
-            self.status = "Invalid relay URL in stored pair."
+            self.connectionStatus = .relayError("Invalid relay URL in stored pair.")
             return
         }
         guard let keyBytes = Data(hexString: startingPair.sessionKeyHex), keyBytes.count == 32 else {
-            self.status = "Invalid session key in stored pair — re-pair from your Mac."
+            self.connectionStatus = .relayError("Invalid session key in stored pair — re-pair from your Mac.")
             return
         }
         let session = JobsSession(key: SymmetricKey(data: keyBytes), pairID: startingPair.pairID)
@@ -1034,21 +1040,9 @@ struct ContentView: View {
                 .padding(.top, 8)
 
             // Status banner
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 8, height: 8)
-                Text("STATUS: CONNECTED")
-                    .font(.system(size: 12, weight: .semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(.green)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(Color.green.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
+            statusBanner
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
 
             // Section header
             Text("Activity Log")
@@ -1060,6 +1054,38 @@ struct ContentView: View {
             // Log entries
             ActivityLogView(entries: coordinator.auditEntries)
         }
+    }
+
+    private var effectiveStatus: ConnectionStatus {
+        effectiveConnectionStatus(
+            base: coordinator.connectionStatus,
+            networkAvailable: coordinator.networkAvailable
+        )
+    }
+
+    private var statusBanner: some View {
+        let status = effectiveStatus
+        let (color, label): (Color, String) = switch status {
+        case .connected:          (.green,  "STATUS: CONNECTED")
+        case .connecting:         (.yellow, "STATUS: CONNECTING")
+        case .backgrounded:       (.yellow, "STATUS: BACKGROUNDED")
+        case .notPaired:          (.gray,   "STATUS: NOT PAIRED")
+        case .networkUnavailable: (.red,    "STATUS: NO NETWORK")
+        case .relayError:         (.red,    "STATUS: ERROR")
+        }
+        return HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(color.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private func makePairingModel() -> PairingFlowModel {
