@@ -7,7 +7,13 @@ import SwiftUI
 import HealthBridgeKit
 
 struct ActivityLogView: View {
+    static let displayLimit = 50
+
     let entries: [AuditEntry]
+
+    private var visibleEntries: [AuditEntry] {
+        entries.suffix(Self.displayLimit).reversed()
+    }
 
     var body: some View {
         if entries.isEmpty {
@@ -19,10 +25,17 @@ struct ActivityLogView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(entries.reversed(), id: \.id) { entry in
+                    ForEach(visibleEntries, id: \.id) { entry in
                         ActivityLogRow(entry: entry)
                         Divider()
                             .padding(.leading, 52)
+                    }
+                    if entries.count > Self.displayLimit {
+                        Text("Only the last \(Self.displayLimit) activities are shown.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
                     }
                 }
             }
