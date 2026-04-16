@@ -14,12 +14,6 @@ struct SettingsView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 8)
 
-            Text("Manage your connection and data preferences.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 24)
-                .padding(.top, 4)
-
             // Manage Connection card
             VStack(spacing: 16) {
                 Text("Manage Connection")
