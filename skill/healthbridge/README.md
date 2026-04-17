@@ -26,43 +26,28 @@ agent links to them.
 
 1. The `healthbridge` Go binary on `PATH`. From this repo:
    ```sh
-   cd cli && go install ./cmd/healthbridge
-   export PATH="$HOME/go/bin:$PATH"
+   brew install shuyangli/tap/healthbridge
    ```
 2. The HealthBridge iOS app installed and paired with this Mac. Run
    `healthbridge pair` once and follow the QR-scan flow.
 3. After pairing, the relay URL and pair ID are saved to
    `~/.healthbridge/config` automatically. No env vars needed.
 
-## Install (Hermes)
+## Installing with `npx skills`
 
-The agentskills.io format is consumed by Hermes via either a local
-directory or a checkout from a community hub. The simplest path:
-
-```sh
-mkdir -p ~/.hermes/skills
-cp -r skill/healthbridge ~/.hermes/skills/healthbridge
-```
-
-Restart Hermes (or trigger a skill reload) and ask it something
-HealthKit-related. The skill's `description` field is what Hermes uses
-to decide when to activate it, so phrasings like "log my breakfast" or
-"how many steps yesterday" should match.
-
-## Install (Claude Code)
+To install the skill:
 
 ```sh
-npx skills add ./skill/healthbridge --agent claude-code
+npx skills add shuyangli/healthbridge
 ```
 
-Or manually:
+To update the skill:
 
 ```sh
-mkdir -p ~/.claude/skills
-cp -r skill/healthbridge ~/.claude/skills/healthbridge
+npx skills update healthbridge
 ```
 
-## Install (any agentskills.io-compatible client)
+## Installing from source (for any agentskills.io-compatible client)
 
 The directory is portable. Drop it wherever your agent looks for
 skills (`~/.config/<agent>/skills/`, an MCP skill directory, etc.).
@@ -76,7 +61,7 @@ specification.
 skills-ref validate ./skill/healthbridge
 ```
 
-## Updating
+## For development: updating the skill
 
 When the CLI grows a new sample type or command:
 

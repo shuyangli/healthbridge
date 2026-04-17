@@ -41,6 +41,16 @@ account and an APNs authentication key — see the
 the relay README. Without push notifications the app falls back to
 polling when foregrounded.
 
+`brew upgrade healthbridge` picks up future releases.
+
+Linux users and anyone who wants a tarball can grab one from
+[GitHub Releases](https://github.com/shuyangli/healthbridge/releases).
+Go developers can still `go install
+github.com/shuyangli/healthbridge/cli/cmd/healthbridge@latest`.
+
+See [`cli/README.md`](cli/README.md) for the full install, configure,
+and first-run walkthrough.
+
 ## Install the iOS app
 
 The iOS app is not on the App Store — side-load it onto your iPhone
@@ -71,21 +81,12 @@ After installing the CLI, add the HealthBridge agent skill so your AI
 agent knows how to drive it:
 
 ```sh
-npx skills add ./skill/healthbridge
+npx skills add shuyangli/healthbridge
 ```
 
 See [`skill/healthbridge/README.md`](skill/healthbridge/README.md) for
-alternative install methods and agent-specific options.
+alternative install methods.
 
-`brew upgrade healthbridge` picks up future releases.
-
-Linux users and anyone who wants a tarball can grab one from
-[GitHub Releases](https://github.com/shuyangli/healthbridge/releases).
-Go developers can still `go install
-github.com/shuyangli/healthbridge/cli/cmd/healthbridge@latest`.
-
-See [`cli/README.md`](cli/README.md) for the full install, configure,
-and first-run walkthrough.
 
 ## Limitations
 
