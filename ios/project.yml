@@ -5,9 +5,11 @@ name: HealthBridge
 # that touch the iOS app structure stay reviewable as text.
 #
 # Important: we ship a hand-written Info.plist and entitlements file with
-# the HealthKit usage strings (which App Review will read). This YAML must
-# NOT contain `info:` or `entitlements:` blocks at the target level — those
-# would tell xcodegen to *generate* those files and clobber the hand-
+# the HealthKit usage strings (which App Review will read) and
+# ITSAppUsesNonExemptEncryption (without it, every TestFlight build stalls
+# on the export-compliance prompt before testers can install). This YAML
+# must NOT contain `info:` or `entitlements:` blocks at the target level —
+# those would tell xcodegen to *generate* those files and clobber the hand-
 # written ones. Instead the paths are wired through INFOPLIST_FILE and
 # CODE_SIGN_ENTITLEMENTS in the target's build settings.
 
